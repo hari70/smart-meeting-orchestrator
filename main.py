@@ -67,13 +67,14 @@ async def sms_webhook(request: Request, db: Session = Depends(get_db)):
         payload = await request.json()
         logger.info(f"Received Surge SMS webhook: {payload}")
         
-        # Extract SMS data from Surge webhook format
-        event = payload.get("event", "")
-        if event != "message.received":
-            logger.info(f"Ignoring webhook event: {event}")
+        # Extract SMS data from ACTUAL Surge webhook format
+        event_type = payload.get("type", "")  # FIXED: was "event"
+        if event_type != "message.received":
+            logger.info(f"Ignoring webhook event: {event_type}")
             return JSONResponse(status_code=200, content={"status": "ignored"})
         
-        message_data = payload.get("message", {})
+        # FIXED: data is in "data" not "message"
+        message_data = payload.get("data", {})
         conversation_data = message_data.get("conversation", {})
         contact_data = conversation_data.get("contact", {})
         
@@ -90,6 +91,8 @@ async def sms_webhook(request: Request, db: Session = Depends(get_db)):
                 content={"error": "Invalid SMS payload"}
             )
         
+        logger.info(f"Processing SMS from {from_number}: {message_text}")
+        
         # Normalize phone number
         from_number = normalize_phone_number(from_number)
         
@@ -104,6 +107,7 @@ async def sms_webhook(request: Request, db: Session = Depends(get_db)):
         
         # Send response back via SMS
         if response:
+            logger.info(f"Sending response SMS to {from_number}: {response}")
             await surge_client.send_message(from_number, response, first_name, last_name)
         
         return JSONResponse(
