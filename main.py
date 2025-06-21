@@ -1,97 +1,119 @@
-# main.py - Iteration 1: Pure webhook test (no database, no claude)
+# main.py - Debug server lifecycle
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import os
 import logging
-import requests
+import signal
+import sys
 from datetime import datetime
+import asyncio
 
-logging.basicConfig(level=logging.INFO)
+# Enhanced logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="SMS Webhook Test - Iteration 1")
+app = FastAPI(title="Debug Server Lifecycle")
+
+# Track server state
+server_start_time = datetime.utcnow()
+request_count = 0
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("🚀 STARTUP EVENT TRIGGERED")
+    logger.info(f"📊 Process ID: {os.getpid()}")
+    logger.info(f"🐍 Python version: {sys.version}")
+    logger.info(f"🌐 PORT env var: {os.getenv('PORT', 'NOT_SET')}")
+    logger.info("✅ STARTUP COMPLETE - SERVER SHOULD STAY RUNNING")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("🛑 SHUTDOWN EVENT TRIGGERED")
+    logger.info(f"⏱️ Server ran for: {datetime.utcnow() - server_start_time}")
+    logger.info(f"📊 Total requests handled: {request_count}")
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "iteration": 1, "features": ["webhook_only"]}
+    global request_count
+    request_count += 1
+    
+    uptime = datetime.utcnow() - server_start_time
+    logger.info(f"🏥 Health check #{request_count} - Uptime: {uptime}")
+    
+    return {
+        "status": "healthy",
+        "uptime_seconds": uptime.total_seconds(),
+        "process_id": os.getpid(),
+        "request_count": request_count,
+        "port": os.getenv("PORT", "8000")
+    }
+
+@app.get("/debug")
+async def debug():
+    global request_count
+    request_count += 1
+    
+    return {
+        "server_running": True,
+        "uptime": (datetime.utcnow() - server_start_time).total_seconds(),
+        "process_id": os.getpid(),
+        "port": os.getenv("PORT", "8000"),
+        "railway_env": {
+            "RAILWAY_ENVIRONMENT": os.getenv("RAILWAY_ENVIRONMENT"),
+            "RAILWAY_SERVICE_NAME": os.getenv("RAILWAY_SERVICE_NAME"),
+            "RAILWAY_PROJECT_NAME": os.getenv("RAILWAY_PROJECT_NAME")
+        }
+    }
 
 @app.post("/webhook/sms")
 async def sms_webhook(request: Request):
-    """Iteration 1: Just prove webhook delivery works"""
+    global request_count
+    request_count += 1
+    
+    logger.info(f"🎯 WEBHOOK RECEIVED - Request #{request_count}")
+    
     try:
         payload = await request.json()
-        logger.info(f"🎯 WEBHOOK RECEIVED: {payload}")
-        
-        # Extract SMS basics
-        if payload.get("type") != "message.received":
-            return JSONResponse({"status": "ignored"})
-        
-        data = payload.get("data", {})
-        contact = data.get("conversation", {}).get("contact", {})
-        
-        phone = contact.get("phone_number", "")
-        message = data.get("body", "")
-        first_name = contact.get("first_name", "")
-        
-        logger.info(f"📱 SMS: {phone} → {message}")
-        
-        # Send immediate response
-        response_msg = f"✅ Webhook working! Received: '{message}'"
-        sms_sent = await send_sms_fast(phone, response_msg, first_name)
-        
-        logger.info(f"📤 Response sent: {sms_sent}")
+        logger.info(f"📱 Webhook payload: {payload}")
         
         return JSONResponse({
-            "status": "success",
-            "iteration": 1,
-            "webhook_received": True,
-            "sms_sent": sms_sent
+            "status": "webhook_received",
+            "request_number": request_count,
+            "server_uptime": (datetime.utcnow() - server_start_time).total_seconds()
         })
         
     except Exception as e:
         logger.error(f"❌ Webhook error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
-async def send_sms_fast(phone: str, message: str, first_name: str = "User") -> bool:
-    """Fast SMS sending - no delays"""
-    try:
-        api_key = os.getenv("SURGE_SMS_API_KEY")
-        account_id = os.getenv("SURGE_ACCOUNT_ID")
-        
-        if not api_key or not account_id:
-            logger.warning("SMS credentials missing")
-            return False
-        
-        url = f"https://api.surge.app/accounts/{account_id}/messages"
-        
-        response = requests.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "body": message,
-                "conversation": {
-                    "contact": {
-                        "first_name": first_name,
-                        "phone_number": phone
-                    }
-                }
-            },
-            timeout=10
-        )
-        
-        success = response.status_code in [200, 201]
-        if not success:
-            logger.error(f"SMS API error: {response.status_code} - {response.text}")
-        
-        return success
-        
-    except Exception as e:
-        logger.error(f"SMS send error: {e}")
-        return False
+# Signal handlers to detect why server might exit
+def signal_handler(signum, frame):
+    logger.info(f"🚨 SIGNAL RECEIVED: {signum}")
+    logger.info(f"⏱️ Server uptime before signal: {datetime.utcnow() - server_start_time}")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
 
 if __name__ == "__main__":
+    logger.info("🔥 STARTING UVICORN SERVER")
+    
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    
+    # Get port from Railway
+    port = int(os.getenv("PORT", 8000))
+    logger.info(f"🌐 Binding to port: {port}")
+    
+    # Run with explicit configuration
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=port,
+        log_level="info",
+        access_log=True
+    )
+    
+    logger.info("🛑 UVICORN.RUN COMPLETED - THIS SHOULD NOT HAPPEN")
