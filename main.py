@@ -1,4 +1,4 @@
-# main.py - SMS Coordination MCP Server
+# main_working.py - Back to proven working version
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -40,8 +40,12 @@ command_processor = CommandProcessor(surge_client, calendar_client, meet_client)
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and load initial data"""
-    create_tables()
-    logger.info("Smart Meeting Orchestrator started successfully")
+    try:
+        create_tables()
+        logger.info("Smart Meeting Orchestrator started successfully")
+    except Exception as e:
+        logger.error(f"Error during startup: {str(e)}")
+        pass
 
 @app.get("/")
 async def root():
@@ -57,6 +61,20 @@ async def health_check():
     """Health check endpoint for Railway"""
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
+@app.get("/debug/env")
+async def debug_env():
+    """Debug endpoint to check environment variables"""
+    api_key = os.getenv("SURGE_SMS_API_KEY", "NOT_SET")
+    account_id = os.getenv("SURGE_ACCOUNT_ID", "NOT_SET")
+    database_url = os.getenv("DATABASE_URL", "NOT_SET")
+    
+    return {
+        "api_key_present": bool(api_key and api_key != "NOT_SET"),
+        "account_id_present": bool(account_id and account_id != "NOT_SET"),
+        "database_url_present": bool(database_url and database_url != "NOT_SET"),
+        "version": "working_stable"
+    }
+
 @app.post("/webhook/sms")
 async def sms_webhook(request: Request, db: Session = Depends(get_db)):
     """
@@ -67,13 +85,14 @@ async def sms_webhook(request: Request, db: Session = Depends(get_db)):
         payload = await request.json()
         logger.info(f"Received Surge SMS webhook: {payload}")
         
-        # Extract SMS data from Surge webhook format
-        event = payload.get("event", "")
-        if event != "message.received":
-            logger.info(f"Ignoring webhook event: {event}")
+        # Extract SMS data from ACTUAL Surge webhook format
+        event_type = payload.get("type", "")
+        if event_type != "message.received":
+            logger.info(f"Ignoring webhook event: {event_type}")
             return JSONResponse(status_code=200, content={"status": "ignored"})
         
-        message_data = payload.get("message", {})
+        # Surge puts data in "data" not "message"
+        message_data = payload.get("data", {})
         conversation_data = message_data.get("conversation", {})
         contact_data = conversation_data.get("contact", {})
         
@@ -90,10 +109,12 @@ async def sms_webhook(request: Request, db: Session = Depends(get_db)):
                 content={"error": "Invalid SMS payload"}
             )
         
+        logger.info(f"Processing SMS from {from_number}: {message_text}")
+        
         # Normalize phone number
         from_number = normalize_phone_number(from_number)
         
-        # Process the SMS command
+        # Process the SMS command using the working command processor
         response = await process_sms_command(
             from_number=from_number,
             message_text=message_text,
@@ -104,6 +125,7 @@ async def sms_webhook(request: Request, db: Session = Depends(get_db)):
         
         # Send response back via SMS
         if response:
+            logger.info(f"Sending response SMS to {from_number}: {response}")
             await surge_client.send_message(from_number, response, first_name, last_name)
         
         return JSONResponse(
@@ -136,7 +158,7 @@ async def process_sms_command(from_number: str, message_text: str, first_name: s
         # Update conversation context
         update_conversation_context(conversation, message_text, db)
         
-        # Process command using CommandProcessor
+        # Process command using proven CommandProcessor
         response = await command_processor.process_command(
             message_text=message_text,
             team_member=team_member,
@@ -203,7 +225,7 @@ async def create_new_user(from_number: str, name_input: str, db: Session):
             team_id=team.id,
             name=name,
             phone=from_number,
-            is_admin=False  # First user becomes admin later
+            is_admin=False
         )
         
         db.add(team_member)
@@ -231,9 +253,7 @@ I can coordinate with Google Calendar and create Google Meet links automatically
         return "Sorry, there was an error setting up your account. Please try again."
 
 def get_or_create_conversation(phone_number: str, db: Session) -> Conversation:
-    """
-    Get existing conversation or create new one
-    """
+    """Get existing conversation or create new one"""
     conversation = db.query(Conversation).filter(
         Conversation.phone_number == phone_number
     ).first()
@@ -251,41 +271,30 @@ def get_or_create_conversation(phone_number: str, db: Session) -> Conversation:
     return conversation
 
 def get_team_member_by_phone(phone_number: str, db: Session) -> TeamMember:
-    """
-    Get team member by phone number
-    """
+    """Get team member by phone number"""
     return db.query(TeamMember).filter(
         TeamMember.phone == phone_number
     ).first()
 
 def update_conversation_context(conversation: Conversation, message: str, db: Session):
-    """
-    Update conversation context with latest message
-    """
+    """Update conversation context with latest message"""
     if not conversation.context:
         conversation.context = {}
     
-    # Store last few messages for context
     messages = conversation.context.get("recent_messages", [])
     messages.append({
         "message": message,
         "timestamp": datetime.utcnow().isoformat()
     })
     
-    # Keep only last 5 messages
     conversation.context["recent_messages"] = messages[-5:]
     conversation.last_activity = datetime.utcnow()
-    
     db.commit()
 
 def normalize_phone_number(phone: str) -> str:
-    """
-    Normalize phone number to consistent format
-    """
-    # Remove all non-digit characters except +
+    """Normalize phone number to consistent format"""
     cleaned = re.sub(r'[^\d+]', '', phone)
     
-    # Ensure it starts with +
     if not cleaned.startswith('+'):
         if cleaned.startswith('1') and len(cleaned) == 11:
             cleaned = '+' + cleaned
@@ -297,12 +306,9 @@ def normalize_phone_number(phone: str) -> str:
     return cleaned
 
 def extract_name_from_message(message: str) -> str:
-    """
-    Extract name from onboarding message
-    """
+    """Extract name from onboarding message"""
     message = message.lower()
     
-    # Common patterns
     patterns = [
         r"name is ([a-zA-Z\s]+)",
         r"i'm ([a-zA-Z\s]+)",
@@ -314,67 +320,10 @@ def extract_name_from_message(message: str) -> str:
         match = re.search(pattern, message)
         if match:
             name = match.group(1).strip().title()
-            # Remove common words
             name = re.sub(r'\b(the|a|an|and|or|but|in|on|at|to|for|of|with|by)\b', '', name, flags=re.IGNORECASE)
             return name.strip()
     
     return None
-
-# API endpoints for manual management
-
-@app.get("/teams")
-async def list_teams(db: Session = Depends(get_db)):
-    """List all teams"""
-    teams = db.query(Team).all()
-    return [{"id": str(team.id), "name": team.name} for team in teams]
-
-@app.get("/teams/{team_id}/members")
-async def list_team_members(team_id: str, db: Session = Depends(get_db)):
-    """List team members"""
-    members = db.query(TeamMember).filter(TeamMember.team_id == team_id).all()
-    return [
-        {
-            "id": str(member.id),
-            "name": member.name,
-            "phone": member.phone,
-            "is_admin": member.is_admin
-        }
-        for member in members
-    ]
-
-@app.post("/teams/{team_id}/members")
-async def add_team_member(
-    team_id: str,
-    member_data: dict,
-    db: Session = Depends(get_db)
-):
-    """Manually add team member"""
-    member = TeamMember(
-        team_id=team_id,
-        name=member_data["name"],
-        phone=normalize_phone_number(member_data["phone"]),
-        google_calendar_id=member_data.get("google_calendar_id"),
-        is_admin=member_data.get("is_admin", False)
-    )
-    
-    db.add(member)
-    db.commit()
-    
-    return {"message": "Member added successfully", "id": str(member.id)}
-
-@app.get("/meetings")
-async def list_meetings(db: Session = Depends(get_db)):
-    """List recent meetings"""
-    meetings = db.query(Meeting).order_by(Meeting.created_at.desc()).limit(10).all()
-    return [
-        {
-            "id": str(meeting.id),
-            "title": meeting.title,
-            "scheduled_time": meeting.scheduled_time.isoformat() if meeting.scheduled_time else None,
-            "google_meet_link": meeting.google_meet_link
-        }
-        for meeting in meetings
-    ]
 
 if __name__ == "__main__":
     import uvicorn
