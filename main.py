@@ -1,119 +1,384 @@
-# main.py - Debug server lifecycle
-from fastapi import FastAPI, Request
+# main.py - SMS Coordination MCP Server
+from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 import os
+import json
 import logging
-import signal
-import sys
-from datetime import datetime
-import asyncio
+from datetime import datetime, timedelta
+import re
 
-# Enhanced logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Local imports
+from database.connection import get_db, create_tables
+from database.models import Team, TeamMember, Meeting, Conversation
+from sms_coordinator.surge_client import SurgeSMSClient
+from sms_coordinator.command_processor import CommandProcessor
+from google_integrations.calendar_client import GoogleCalendarClient
+from google_integrations.meet_client import GoogleMeetClient
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Debug Server Lifecycle")
+# Initialize FastAPI app
+app = FastAPI(
+    title="Smart Meeting Orchestrator",
+    description="SMS-based meeting coordination using MCP architecture",
+    version="1.0.0"
+)
 
-# Track server state
-server_start_time = datetime.utcnow()
-request_count = 0
+# Initialize clients
+surge_client = SurgeSMSClient(
+    api_key=os.getenv("SURGE_SMS_API_KEY"),
+    account_id=os.getenv("SURGE_ACCOUNT_ID")
+)
+
+calendar_client = GoogleCalendarClient()
+meet_client = GoogleMeetClient()
+command_processor = CommandProcessor(surge_client, calendar_client, meet_client)
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("🚀 STARTUP EVENT TRIGGERED")
-    logger.info(f"📊 Process ID: {os.getpid()}")
-    logger.info(f"🐍 Python version: {sys.version}")
-    logger.info(f"🌐 PORT env var: {os.getenv('PORT', 'NOT_SET')}")
-    logger.info("✅ STARTUP COMPLETE - SERVER SHOULD STAY RUNNING")
+    """Initialize database and load initial data"""
+    create_tables()
+    logger.info("🚀 Smart Meeting Orchestrator MCP Server started successfully")
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("🛑 SHUTDOWN EVENT TRIGGERED")
-    logger.info(f"⏱️ Server ran for: {datetime.utcnow() - server_start_time}")
-    logger.info(f"📊 Total requests handled: {request_count}")
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "message": "Smart Meeting Orchestrator MCP Server",
+        "status": "running",
+        "version": "1.0.0"
+    }
 
 @app.get("/health")
-async def health():
-    global request_count
-    request_count += 1
-    
-    uptime = datetime.utcnow() - server_start_time
-    logger.info(f"🏥 Health check #{request_count} - Uptime: {uptime}")
-    
-    return {
-        "status": "healthy",
-        "uptime_seconds": uptime.total_seconds(),
-        "process_id": os.getpid(),
-        "request_count": request_count,
-        "port": os.getenv("PORT", "8000")
-    }
-
-@app.get("/debug")
-async def debug():
-    global request_count
-    request_count += 1
-    
-    return {
-        "server_running": True,
-        "uptime": (datetime.utcnow() - server_start_time).total_seconds(),
-        "process_id": os.getpid(),
-        "port": os.getenv("PORT", "8000"),
-        "railway_env": {
-            "RAILWAY_ENVIRONMENT": os.getenv("RAILWAY_ENVIRONMENT"),
-            "RAILWAY_SERVICE_NAME": os.getenv("RAILWAY_SERVICE_NAME"),
-            "RAILWAY_PROJECT_NAME": os.getenv("RAILWAY_PROJECT_NAME")
-        }
-    }
+async def health_check():
+    """Health check endpoint for Railway"""
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
 @app.post("/webhook/sms")
-async def sms_webhook(request: Request):
-    global request_count
-    request_count += 1
-    
-    logger.info(f"🎯 WEBHOOK RECEIVED - Request #{request_count}")
-    
+async def sms_webhook(request: Request, db: Session = Depends(get_db)):
+    """
+    Main webhook endpoint for incoming SMS messages from Surge
+    """
     try:
+        # Parse incoming webhook payload
         payload = await request.json()
-        logger.info(f"📱 Webhook payload: {payload}")
+        logger.info(f"🎯 Received Surge SMS webhook: {payload}")
         
-        return JSONResponse({
-            "status": "webhook_received",
-            "request_number": request_count,
-            "server_uptime": (datetime.utcnow() - server_start_time).total_seconds()
-        })
+        # Extract SMS data from Surge webhook format
+        event = payload.get("event", "")
+        if event != "message.received":
+            logger.info(f"Ignoring webhook event: {event}")
+            return JSONResponse(status_code=200, content={"status": "ignored"})
+        
+        message_data = payload.get("message", {})
+        conversation_data = message_data.get("conversation", {})
+        contact_data = conversation_data.get("contact", {})
+        
+        from_number = contact_data.get("phone_number", "").strip()
+        message_text = message_data.get("body", "").strip()
+        message_id = message_data.get("id", "")
+        first_name = contact_data.get("first_name", "")
+        last_name = contact_data.get("last_name", "")
+        
+        if not from_number or not message_text:
+            logger.warning("Invalid Surge SMS webhook payload received")
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid SMS payload"}
+            )
+        
+        # Normalize phone number
+        from_number = normalize_phone_number(from_number)
+        
+        logger.info(f"📱 Processing SMS from {from_number} ({first_name}): {message_text}")
+        
+        # Process the SMS command
+        response = await process_sms_command(
+            from_number=from_number,
+            message_text=message_text,
+            first_name=first_name,
+            last_name=last_name,
+            db=db
+        )
+        
+        # Send response back via SMS
+        if response:
+            success = await surge_client.send_message(from_number, response, first_name, last_name)
+            logger.info(f"📤 SMS response sent: {success}")
+        
+        return JSONResponse(
+            status_code=200,
+            content={"status": "processed", "message_id": message_id}
+        )
         
     except Exception as e:
-        logger.error(f"❌ Webhook error: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.error(f"❌ Error processing Surge SMS webhook: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Internal server error"}
+        )
 
-# Signal handlers to detect why server might exit
-def signal_handler(signum, frame):
-    logger.info(f"🚨 SIGNAL RECEIVED: {signum}")
-    logger.info(f"⏱️ Server uptime before signal: {datetime.utcnow() - server_start_time}")
-    sys.exit(0)
+async def process_sms_command(from_number: str, message_text: str, first_name: str, last_name: str, db: Session):
+    """
+    Process incoming SMS command and route to appropriate handler
+    """
+    try:
+        # Get or create conversation context
+        conversation = get_or_create_conversation(from_number, db)
+        
+        # Get team member info
+        team_member = get_team_member_by_phone(from_number, db)
+        
+        if not team_member:
+            # New user - guide them through setup
+            return await handle_new_user(from_number, message_text, first_name, last_name, db)
+        
+        # Update conversation context
+        update_conversation_context(conversation, message_text, db)
+        
+        # Process command using CommandProcessor
+        response = await command_processor.process_command(
+            message_text=message_text,
+            team_member=team_member,
+            conversation=conversation,
+            db=db
+        )
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error processing command from {from_number}: {str(e)}")
+        return "Sorry, I encountered an error processing your request. Please try again."
 
-signal.signal(signal.SIGTERM, signal_handler)
-signal.signal(signal.SIGINT, signal_handler)
+async def handle_new_user(from_number: str, message_text: str, first_name: str, last_name: str, db: Session):
+    """
+    Handle new user onboarding with name from Surge contact data
+    """
+    # If we have first/last name from Surge contact, use that
+    if first_name or last_name:
+        full_name = f"{first_name} {last_name}".strip()
+        return await create_new_user(from_number, full_name, db)
+    
+    # Otherwise, use original flow
+    welcome_message = """
+🎉 Welcome to Smart Meeting Orchestrator!
 
-if __name__ == "__main__":
-    logger.info("🔥 STARTING UVICORN SERVER")
+I can help you coordinate family meetings via SMS. To get started, I need to add you to a team.
+
+Please reply with your name and I'll set you up!
+
+Example: "My name is John Smith"
+    """.strip()
     
-    import uvicorn
+    # Check if they're providing their name
+    if "name is" in message_text.lower() or "i'm" in message_text.lower():
+        return await create_new_user(from_number, message_text, db)
     
-    # Get port from Railway
-    port = int(os.getenv("PORT", 8000))
-    logger.info(f"🌐 Binding to port: {port}")
+    return welcome_message
+
+async def create_new_user(from_number: str, name_input: str, db: Session):
+    """
+    Create new user and add them to default family team
+    """
+    try:
+        # Extract or use provided name
+        if "name is" in name_input.lower() or "i'm" in name_input.lower():
+            name = extract_name_from_message(name_input)
+        else:
+            name = name_input.strip()
+        
+        if not name:
+            return "I couldn't understand your name. Please try: 'My name is [Your Name]'"
+        
+        # Get or create default family team
+        team = db.query(Team).filter(Team.name == "Family").first()
+        if not team:
+            team = Team(name="Family")
+            db.add(team)
+            db.commit()
+            db.refresh(team)
+        
+        # Create team member
+        team_member = TeamMember(
+            team_id=team.id,
+            name=name,
+            phone=from_number,
+            is_admin=False  # First user becomes admin later
+        )
+        
+        db.add(team_member)
+        db.commit()
+        
+        # If this is the first team member, make them admin
+        member_count = db.query(TeamMember).filter(TeamMember.team_id == team.id).count()
+        if member_count == 1:
+            team_member.is_admin = True
+            db.commit()
+        
+        return f"""
+✅ Welcome {name}! You've been added to the Family team.
+
+Here are some things you can try:
+• "Family meeting about vacation this weekend"
+• "Schedule call with everyone next week"
+• "What's our next meeting?"
+
+I can coordinate with Google Calendar and create Google Meet links automatically!
+        """.strip()
+        
+    except Exception as e:
+        logger.error(f"Error creating new user: {str(e)}")
+        return "Sorry, there was an error setting up your account. Please try again."
+
+def get_or_create_conversation(phone_number: str, db: Session) -> Conversation:
+    """
+    Get existing conversation or create new one
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.phone_number == phone_number
+    ).first()
     
-    # Run with explicit configuration
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=port,
-        log_level="info",
-        access_log=True
+    if not conversation:
+        conversation = Conversation(
+            phone_number=phone_number,
+            context={},
+            last_activity=datetime.utcnow()
+        )
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+    
+    return conversation
+
+def get_team_member_by_phone(phone_number: str, db: Session) -> TeamMember:
+    """
+    Get team member by phone number
+    """
+    return db.query(TeamMember).filter(
+        TeamMember.phone == phone_number
+    ).first()
+
+def update_conversation_context(conversation: Conversation, message: str, db: Session):
+    """
+    Update conversation context with latest message
+    """
+    if not conversation.context:
+        conversation.context = {}
+    
+    # Store last few messages for context
+    messages = conversation.context.get("recent_messages", [])
+    messages.append({
+        "message": message,
+        "timestamp": datetime.utcnow().isoformat()
+    })
+    
+    # Keep only last 5 messages
+    conversation.context["recent_messages"] = messages[-5:]
+    conversation.last_activity = datetime.utcnow()
+    
+    db.commit()
+
+def normalize_phone_number(phone: str) -> str:
+    """
+    Normalize phone number to consistent format
+    """
+    # Remove all non-digit characters except +
+    cleaned = re.sub(r'[^\d+]', '', phone)
+    
+    # Ensure it starts with +
+    if not cleaned.startswith('+'):
+        if cleaned.startswith('1') and len(cleaned) == 11:
+            cleaned = '+' + cleaned
+        elif len(cleaned) == 10:
+            cleaned = '+1' + cleaned
+        else:
+            cleaned = '+' + cleaned
+    
+    return cleaned
+
+def extract_name_from_message(message: str) -> str:
+    """
+    Extract name from onboarding message
+    """
+    message = message.lower()
+    
+    # Common patterns
+    patterns = [
+        r"name is ([a-zA-Z\s]+)",
+        r"i'm ([a-zA-Z\s]+)",
+        r"i am ([a-zA-Z\s]+)",
+        r"call me ([a-zA-Z\s]+)"
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, message)
+        if match:
+            name = match.group(1).strip().title()
+            # Remove common words
+            name = re.sub(r'\b(the|a|an|and|or|but|in|on|at|to|for|of|with|by)\b', '', name, flags=re.IGNORECASE)
+            return name.strip()
+    
+    return None
+
+# API endpoints for manual management
+
+@app.get("/teams")
+async def list_teams(db: Session = Depends(get_db)):
+    """List all teams"""
+    teams = db.query(Team).all()
+    return [{"id": str(team.id), "name": team.name} for team in teams]
+
+@app.get("/teams/{team_id}/members")
+async def list_team_members(team_id: str, db: Session = Depends(get_db)):
+    """List team members"""
+    members = db.query(TeamMember).filter(TeamMember.team_id == team_id).all()
+    return [
+        {
+            "id": str(member.id),
+            "name": member.name,
+            "phone": member.phone,
+            "is_admin": member.is_admin
+        }
+        for member in members
+    ]
+
+@app.post("/teams/{team_id}/members")
+async def add_team_member(
+    team_id: str,
+    member_data: dict,
+    db: Session = Depends(get_db)
+):
+    """Manually add team member"""
+    member = TeamMember(
+        team_id=team_id,
+        name=member_data["name"],
+        phone=normalize_phone_number(member_data["phone"]),
+        google_calendar_id=member_data.get("google_calendar_id"),
+        is_admin=member_data.get("is_admin", False)
     )
     
-    logger.info("🛑 UVICORN.RUN COMPLETED - THIS SHOULD NOT HAPPEN")
+    db.add(member)
+    db.commit()
+    
+    return {"message": "Member added successfully", "id": str(member.id)}
+
+@app.get("/meetings")
+async def list_meetings(db: Session = Depends(get_db)):
+    """List recent meetings"""
+    meetings = db.query(Meeting).order_by(Meeting.created_at.desc()).limit(10).all()
+    return [
+        {
+            "id": str(meeting.id),
+            "title": meeting.title,
+            "scheduled_time": meeting.scheduled_time.isoformat() if meeting.scheduled_time else None,
+            "google_meet_link": meeting.google_meet_link
+        }
+        for meeting in meetings
+    ]
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
