@@ -1,218 +1,256 @@
-# main_working.py - Back to proven working version
-from fastapi import FastAPI, Request, Depends, HTTPException
+# main.py - Clean SMS → Claude → MCP → Response
+from fastapi import FastAPI, Request, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 import os
 import json
 import logging
+import requests
+import anthropic
 from datetime import datetime, timedelta
 import re
 
-# Local imports
+# Database imports
 from database.connection import get_db, create_tables
-from database.models import Team, TeamMember, Meeting, Conversation
-from sms_coordinator.surge_client import SurgeSMSClient
-from sms_coordinator.command_processor import CommandProcessor
-from google_integrations.calendar_client import GoogleCalendarClient
-from google_integrations.meet_client import GoogleMeetClient
+from database.models import Team, TeamMember, Meeting
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
-app = FastAPI(
-    title="Smart Meeting Orchestrator",
-    description="SMS-based meeting coordination using MCP architecture",
-    version="1.0.0"
-)
+app = FastAPI(title="Smart Meeting Orchestrator", version="2.0-clean")
 
-# Initialize clients
-surge_client = SurgeSMSClient(
-    api_key=os.getenv("SURGE_SMS_API_KEY"),
-    account_id=os.getenv("SURGE_ACCOUNT_ID")
-)
-
-calendar_client = GoogleCalendarClient()
-meet_client = GoogleMeetClient()
-command_processor = CommandProcessor(surge_client, calendar_client, meet_client)
+# Initialize Claude client
+try:
+    claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    claude_available = True
+    logger.info("Claude API initialized")
+except:
+    claude_client = None
+    claude_available = False
+    logger.warning("Claude API not available")
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database and load initial data"""
-    try:
-        create_tables()
-        logger.info("Smart Meeting Orchestrator started successfully")
-    except Exception as e:
-        logger.error(f"Error during startup: {str(e)}")
-        pass
-
-@app.get("/")
-async def root():
-    """Root endpoint"""
-    return {
-        "message": "Smart Meeting Orchestrator MCP Server",
-        "status": "running",
-        "version": "1.0.0"
-    }
+    create_tables()
+    logger.info("Clean SMS Orchestrator started")
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for Railway"""
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
-
-@app.get("/debug/env")
-async def debug_env():
-    """Debug endpoint to check environment variables"""
-    api_key = os.getenv("SURGE_SMS_API_KEY", "NOT_SET")
-    account_id = os.getenv("SURGE_ACCOUNT_ID", "NOT_SET")
-    database_url = os.getenv("DATABASE_URL", "NOT_SET")
-    
-    return {
-        "api_key_present": bool(api_key and api_key != "NOT_SET"),
-        "account_id_present": bool(account_id and account_id != "NOT_SET"),
-        "database_url_present": bool(database_url and database_url != "NOT_SET"),
-        "version": "working_stable"
-    }
+    return {"status": "healthy", "claude_available": claude_available}
 
 @app.post("/webhook/sms")
 async def sms_webhook(request: Request, db: Session = Depends(get_db)):
-    """
-    Main webhook endpoint for incoming SMS messages from Surge
-    """
+    """SMS → Claude → MCP → Response"""
     try:
-        # Parse incoming webhook payload
+        # 1. Parse SMS webhook
         payload = await request.json()
-        logger.info(f"Received Surge SMS webhook: {payload}")
+        logger.info(f"SMS received: {payload}")
         
-        # Extract SMS data from ACTUAL Surge webhook format
-        event_type = payload.get("type", "")
-        if event_type != "message.received":
-            logger.info(f"Ignoring webhook event: {event_type}")
-            return JSONResponse(status_code=200, content={"status": "ignored"})
+        if payload.get("type") != "message.received":
+            return JSONResponse({"status": "ignored"})
         
-        # Surge puts data in "data" not "message"
-        message_data = payload.get("data", {})
-        conversation_data = message_data.get("conversation", {})
-        contact_data = conversation_data.get("contact", {})
+        # Extract SMS data
+        data = payload.get("data", {})
+        contact = data.get("conversation", {}).get("contact", {})
         
-        from_number = contact_data.get("phone_number", "").strip()
-        message_text = message_data.get("body", "").strip()
-        message_id = message_data.get("id", "")
-        first_name = contact_data.get("first_name", "")
-        last_name = contact_data.get("last_name", "")
+        phone = contact.get("phone_number", "").strip()
+        message = data.get("body", "").strip()
+        first_name = contact.get("first_name", "")
+        last_name = contact.get("last_name", "")
         
-        if not from_number or not message_text:
-            logger.warning("Invalid Surge SMS webhook payload received")
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Invalid SMS payload"}
-            )
+        if not phone or not message:
+            return JSONResponse({"error": "Invalid SMS"}, status_code=400)
         
-        logger.info(f"Processing SMS from {from_number}: {message_text}")
+        phone = normalize_phone(phone)
+        logger.info(f"Processing: {phone} → {message}")
         
-        # Normalize phone number
-        from_number = normalize_phone_number(from_number)
+        # 2. Get or create user
+        user = get_or_create_user(phone, first_name, last_name, db)
         
-        # Process the SMS command using the working command processor
-        response = await process_sms_command(
-            from_number=from_number,
-            message_text=message_text,
-            first_name=first_name,
-            last_name=last_name,
-            db=db
-        )
+        # 3. Send to Claude for processing
+        response_text = await process_with_claude(message, user, db)
         
-        # Send response back via SMS
-        if response:
-            logger.info(f"Sending response SMS to {from_number}: {response}")
-            await surge_client.send_message(from_number, response, first_name, last_name)
+        # 4. Send SMS response
+        if response_text:
+            await send_sms(phone, response_text, first_name, last_name)
+            logger.info(f"SMS sent: {phone} ← {response_text[:50]}...")
         
-        return JSONResponse(
-            status_code=200,
-            content={"status": "processed", "message_id": message_id}
-        )
+        return JSONResponse({"status": "processed"})
         
     except Exception as e:
-        logger.error(f"Error processing Surge SMS webhook: {str(e)}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Internal server error"}
-        )
+        logger.error(f"SMS processing error: {e}")
+        return JSONResponse({"error": "Processing failed"}, status_code=500)
 
-async def process_sms_command(from_number: str, message_text: str, first_name: str, last_name: str, db: Session):
-    """
-    Process incoming SMS command and route to appropriate handler
-    """
+async def process_with_claude(message: str, user, db: Session) -> str:
+    """Send message to Claude, get JSON action, execute it"""
+    
+    if not claude_available:
+        return "SMS system working! Claude AI processing will be available soon."
+    
     try:
-        # Get or create conversation context
-        conversation = get_or_create_conversation(from_number, db)
-        
-        # Get team member info
-        team_member = get_team_member_by_phone(from_number, db)
-        
-        if not team_member:
-            # New user - guide them through setup
-            return await handle_new_user(from_number, message_text, first_name, last_name, db)
-        
-        # Update conversation context
-        update_conversation_context(conversation, message_text, db)
-        
-        # Process command using proven CommandProcessor
-        response = await command_processor.process_command(
-            message_text=message_text,
-            team_member=team_member,
-            conversation=conversation,
-            db=db
+        # Claude prompt for clean JSON response
+        prompt = f"""You are a smart meeting assistant. Convert this SMS into actionable JSON.
+
+SMS: "{message}"
+User: {user.name}
+
+Respond with ONLY a JSON object:
+
+{{
+  "action": "schedule_meeting" | "list_meetings" | "help",
+  "meeting_title": "string (if scheduling)",
+  "participants": ["list of names"],
+  "date": "today|tomorrow|weekend|YYYY-MM-DD",
+  "time": "3pm|15:00|etc (if specified)",
+  "response": "what to tell the user"
+}}
+
+Examples:
+- "Schedule meeting with John at 3pm today" → {{"action": "schedule_meeting", "meeting_title": "Meeting with John", "participants": ["John"], "date": "today", "time": "3pm", "response": "Scheduling meeting with John for today at 3pm"}}
+- "What meetings do I have?" → {{"action": "list_meetings", "response": "Here are your upcoming meetings"}}
+- "Hello" → {{"action": "help", "response": "I can help you schedule meetings! Try: 'Schedule meeting with John tomorrow'"}}"""
+
+        # Call Claude API
+        response = claude_client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=500,
+            temperature=0.1,
+            messages=[{"role": "user", "content": prompt}]
         )
         
-        return response
+        # Parse Claude's JSON response
+        claude_text = response.content[0].text.strip()
+        logger.info(f"Claude response: {claude_text}")
+        
+        # Extract JSON from response
+        json_start = claude_text.find('{')
+        json_end = claude_text.rfind('}') + 1
+        json_str = claude_text[json_start:json_end]
+        
+        action_data = json.loads(json_str)
+        logger.info(f"Parsed action: {action_data}")
+        
+        # Execute the action
+        return await execute_action(action_data, user, db)
         
     except Exception as e:
-        logger.error(f"Error processing command from {from_number}: {str(e)}")
-        return "Sorry, I encountered an error processing your request. Please try again."
+        logger.error(f"Claude processing error: {e}")
+        return "I received your message! Let me help you schedule meetings. Try: 'Schedule meeting with John tomorrow'"
 
-async def handle_new_user(from_number: str, message_text: str, first_name: str, last_name: str, db: Session):
-    """
-    Handle new user onboarding with name from Surge contact data
-    """
-    # If we have first/last name from Surge contact, use that
-    if first_name or last_name:
-        full_name = f"{first_name} {last_name}".strip()
-        return await create_new_user(from_number, full_name, db)
+async def execute_action(action_data: dict, user, db: Session) -> str:
+    """Execute the action from Claude's JSON response"""
     
-    # Otherwise, use original flow
-    welcome_message = """
-🎉 Welcome to Smart Meeting Orchestrator!
-
-I can help you coordinate family meetings via SMS. To get started, I need to add you to a team.
-
-Please reply with your name and I'll set you up!
-
-Example: "My name is John Smith"
-    """.strip()
+    action = action_data.get("action", "help")
     
-    # Check if they're providing their name
-    if "name is" in message_text.lower() or "i'm" in message_text.lower():
-        return await create_new_user(from_number, message_text, db)
-    
-    return welcome_message
+    if action == "schedule_meeting":
+        return await schedule_meeting(action_data, user, db)
+    elif action == "list_meetings":
+        return await list_meetings(user, db)
+    else:
+        return action_data.get("response", "I can help you schedule meetings! Try: 'Schedule meeting with John tomorrow'")
 
-async def create_new_user(from_number: str, name_input: str, db: Session):
-    """
-    Create new user and add them to default family team
-    """
+async def schedule_meeting(action_data: dict, user, db: Session) -> str:
+    """Schedule a meeting based on Claude's parsed data"""
     try:
-        # Extract or use provided name
-        if "name is" in name_input.lower() or "i'm" in name_input.lower():
-            name = extract_name_from_message(name_input)
-        else:
-            name = name_input.strip()
+        title = action_data.get("meeting_title", "Meeting")
+        date_str = action_data.get("date", "today")
+        time_str = action_data.get("time", "")
         
-        if not name:
-            return "I couldn't understand your name. Please try: 'My name is [Your Name]'"
+        # Calculate meeting time
+        meeting_time = parse_meeting_time(date_str, time_str)
         
-        # Get or create default family team
+        # Create meeting in database
+        meeting = Meeting(
+            team_id=user.team_id,
+            title=title,
+            scheduled_time=meeting_time,
+            created_by_phone=user.phone,
+            description=f"Scheduled via SMS: {action_data}"
+        )
+        
+        db.add(meeting)
+        db.commit()
+        
+        # Format response
+        time_str = meeting_time.strftime("%A, %B %d at %I:%M %p")
+        return f"""✅ Meeting scheduled!
+
+📅 {title}
+🕐 {time_str}
+
+Meeting saved to your calendar!"""
+        
+    except Exception as e:
+        logger.error(f"Meeting scheduling error: {e}")
+        return "Meeting request received! I'll help you schedule it."
+
+async def list_meetings(user, db: Session) -> str:
+    """List upcoming meetings"""
+    try:
+        meetings = db.query(Meeting).filter(
+            Meeting.team_id == user.team_id,
+            Meeting.scheduled_time > datetime.utcnow()
+        ).order_by(Meeting.scheduled_time).limit(5).all()
+        
+        if not meetings:
+            return "No upcoming meetings. Try: 'Schedule meeting with John tomorrow'"
+        
+        response = "📅 Your upcoming meetings:\n\n"
+        for i, meeting in enumerate(meetings, 1):
+            time_str = meeting.scheduled_time.strftime("%a %m/%d at %I:%M %p")
+            response += f"{i}. {meeting.title}\n   {time_str}\n\n"
+        
+        return response.strip()
+        
+    except Exception as e:
+        logger.error(f"List meetings error: {e}")
+        return "I can show you your meetings. Try asking again!"
+
+def parse_meeting_time(date_str: str, time_str: str) -> datetime:
+    """Parse date and time strings into datetime"""
+    now = datetime.utcnow()
+    
+    # Parse date
+    if date_str == "today":
+        target_date = now.date()
+    elif date_str == "tomorrow":
+        target_date = (now + timedelta(days=1)).date()
+    elif date_str == "weekend":
+        # Next Saturday
+        days_until_saturday = (5 - now.weekday()) % 7
+        if days_until_saturday == 0:
+            days_until_saturday = 7
+        target_date = (now + timedelta(days=days_until_saturday)).date()
+    else:
+        target_date = (now + timedelta(days=1)).date()  # Default tomorrow
+    
+    # Parse time
+    hour = 15  # Default 3 PM
+    minute = 0
+    
+    if time_str:
+        import re
+        time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', time_str.lower())
+        if time_match:
+            hour = int(time_match.group(1))
+            minute = int(time_match.group(2)) if time_match.group(2) else 0
+            am_pm = time_match.group(3)
+            
+            if am_pm == "pm" and hour != 12:
+                hour += 12
+            elif am_pm == "am" and hour == 12:
+                hour = 0
+    
+    return datetime.combine(target_date, datetime.min.time().replace(hour=hour, minute=minute))
+
+def get_or_create_user(phone: str, first_name: str, last_name: str, db: Session):
+    """Get or create user"""
+    user = db.query(TeamMember).filter(TeamMember.phone == phone).first()
+    
+    if not user:
+        # Create team if needed
         team = db.query(Team).filter(Team.name == "Family").first()
         if not team:
             team = Team(name="Family")
@@ -220,81 +258,54 @@ async def create_new_user(from_number: str, name_input: str, db: Session):
             db.commit()
             db.refresh(team)
         
-        # Create team member
-        team_member = TeamMember(
-            team_id=team.id,
-            name=name,
-            phone=from_number,
-            is_admin=False
-        )
-        
-        db.add(team_member)
+        # Create user
+        name = f"{first_name} {last_name}".strip() or "SMS User"
+        user = TeamMember(team_id=team.id, name=name, phone=phone)
+        db.add(user)
         db.commit()
+        db.refresh(user)
         
-        # If this is the first team member, make them admin
-        member_count = db.query(TeamMember).filter(TeamMember.team_id == team.id).count()
-        if member_count == 1:
-            team_member.is_admin = True
-            db.commit()
+        logger.info(f"Created user: {name} ({phone})")
+    
+    return user
+
+async def send_sms(phone: str, message: str, first_name: str, last_name: str) -> bool:
+    """Send SMS via Surge API"""
+    try:
+        api_key = os.getenv("SURGE_SMS_API_KEY")
+        account_id = os.getenv("SURGE_ACCOUNT_ID")
         
-        return f"""
-✅ Welcome {name}! You've been added to the Family team.
-
-Here are some things you can try:
-• "Family meeting about vacation this weekend"
-• "Schedule call with everyone next week"
-• "What's our next meeting?"
-
-I can coordinate with Google Calendar and create Google Meet links automatically!
-        """.strip()
+        if not api_key or not account_id:
+            logger.warning("SMS credentials not configured")
+            return False
+        
+        url = f"https://api.surge.app/accounts/{account_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "body": message,
+            "conversation": {
+                "contact": {
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "phone_number": phone
+                }
+            }
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        return response.status_code in [200, 201]
         
     except Exception as e:
-        logger.error(f"Error creating new user: {str(e)}")
-        return "Sorry, there was an error setting up your account. Please try again."
+        logger.error(f"SMS sending error: {e}")
+        return False
 
-def get_or_create_conversation(phone_number: str, db: Session) -> Conversation:
-    """Get existing conversation or create new one"""
-    conversation = db.query(Conversation).filter(
-        Conversation.phone_number == phone_number
-    ).first()
-    
-    if not conversation:
-        conversation = Conversation(
-            phone_number=phone_number,
-            context={},
-            last_activity=datetime.utcnow()
-        )
-        db.add(conversation)
-        db.commit()
-        db.refresh(conversation)
-    
-    return conversation
-
-def get_team_member_by_phone(phone_number: str, db: Session) -> TeamMember:
-    """Get team member by phone number"""
-    return db.query(TeamMember).filter(
-        TeamMember.phone == phone_number
-    ).first()
-
-def update_conversation_context(conversation: Conversation, message: str, db: Session):
-    """Update conversation context with latest message"""
-    if not conversation.context:
-        conversation.context = {}
-    
-    messages = conversation.context.get("recent_messages", [])
-    messages.append({
-        "message": message,
-        "timestamp": datetime.utcnow().isoformat()
-    })
-    
-    conversation.context["recent_messages"] = messages[-5:]
-    conversation.last_activity = datetime.utcnow()
-    db.commit()
-
-def normalize_phone_number(phone: str) -> str:
-    """Normalize phone number to consistent format"""
+def normalize_phone(phone: str) -> str:
+    """Normalize phone number"""
     cleaned = re.sub(r'[^\d+]', '', phone)
-    
     if not cleaned.startswith('+'):
         if cleaned.startswith('1') and len(cleaned) == 11:
             cleaned = '+' + cleaned
@@ -302,28 +313,7 @@ def normalize_phone_number(phone: str) -> str:
             cleaned = '+1' + cleaned
         else:
             cleaned = '+' + cleaned
-    
     return cleaned
-
-def extract_name_from_message(message: str) -> str:
-    """Extract name from onboarding message"""
-    message = message.lower()
-    
-    patterns = [
-        r"name is ([a-zA-Z\s]+)",
-        r"i'm ([a-zA-Z\s]+)",
-        r"i am ([a-zA-Z\s]+)",
-        r"call me ([a-zA-Z\s]+)"
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, message)
-        if match:
-            name = match.group(1).strip().title()
-            name = re.sub(r'\b(the|a|an|and|or|but|in|on|at|to|for|of|with|by)\b', '', name, flags=re.IGNORECASE)
-            return name.strip()
-    
-    return None
 
 if __name__ == "__main__":
     import uvicorn
