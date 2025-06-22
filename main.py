@@ -65,15 +65,15 @@ async def sms_webhook(request: Request, db: Session = Depends(get_db)):
     try:
         # Parse incoming webhook payload
         payload = await request.json()
-        logger.info(f"🎯 Received Surge SMS webhook: {payload}")
+        logger.info(f"🎯 STEP 1: Received Surge SMS webhook: {payload}")
         
         # Extract SMS data from Surge webhook format
-        event = payload.get("event", "")
+        event = payload.get("type", "")  # Surge uses 'type', not 'event'
         if event != "message.received":
-            logger.info(f"Ignoring webhook event: {event}")
+            logger.info(f"STEP 1B: Ignoring webhook event: {event}")
             return JSONResponse(status_code=200, content={"status": "ignored"})
         
-        message_data = payload.get("message", {})
+        message_data = payload.get("data", {})  # Surge uses 'data', not 'message'
         conversation_data = message_data.get("conversation", {})
         contact_data = conversation_data.get("contact", {})
         
@@ -83,8 +83,11 @@ async def sms_webhook(request: Request, db: Session = Depends(get_db)):
         first_name = contact_data.get("first_name", "")
         last_name = contact_data.get("last_name", "")
         
+        logger.info(f"📱 STEP 2: Extracted SMS data - From: {from_number}, Message: '{message_text}', Name: {first_name} {last_name}")
+        
         if not from_number or not message_text:
-            logger.warning("Invalid Surge SMS webhook payload received")
+            logger.warning("❌ STEP 2 FAILED: Invalid Surge SMS webhook payload received")
+            logger.warning(f"   Phone: '{from_number}', Message: '{message_text}'")
             return JSONResponse(
                 status_code=400,
                 content={"error": "Invalid SMS payload"}
@@ -92,10 +95,10 @@ async def sms_webhook(request: Request, db: Session = Depends(get_db)):
         
         # Normalize phone number
         from_number = normalize_phone_number(from_number)
-        
-        logger.info(f"📱 Processing SMS from {from_number} ({first_name}): {message_text}")
+        logger.info(f"📞 STEP 3: Normalized phone: {from_number}")
         
         # Process the SMS command
+        logger.info(f"🔄 STEP 4: Starting SMS command processing...")
         response = await process_sms_command(
             from_number=from_number,
             message_text=message_text,
@@ -104,10 +107,26 @@ async def sms_webhook(request: Request, db: Session = Depends(get_db)):
             db=db
         )
         
+        logger.info(f"✅ STEP 5: SMS processing complete. Response: '{response}'")
+        
         # Send response back via SMS
         if response:
-            success = await surge_client.send_message(from_number, response, first_name, last_name)
-            logger.info(f"📤 SMS response sent: {success}")
+            logger.info(f"📤 STEP 6: Attempting to send SMS response...")
+            
+            # Check SMS credentials first
+            api_key = os.getenv("SURGE_SMS_API_KEY")
+            account_id = os.getenv("SURGE_ACCOUNT_ID")
+            
+            if not api_key or not account_id:
+                logger.error("❌ STEP 6 FAILED: SMS credentials not configured!")
+                logger.error(f"API Key present: {bool(api_key)}")
+                logger.error(f"Account ID present: {bool(account_id)}")
+            else:
+                success = await surge_client.send_message(from_number, response, first_name, last_name)
+                logger.info(f"📨 STEP 7: SMS response sent successfully: {success}")
+                
+                if not success:
+                    logger.error(f"❌ STEP 7 FAILED: Could not send SMS response")
         
         return JSONResponse(
             status_code=200,
@@ -378,6 +397,79 @@ async def list_meetings(db: Session = Depends(get_db)):
         }
         for meeting in meetings
     ]
+
+@app.get("/debug/config")
+async def debug_config():
+    """Debug endpoint to check configuration"""
+    return {
+        "surge_api_key_present": bool(os.getenv("SURGE_SMS_API_KEY")),
+        "surge_account_id_present": bool(os.getenv("SURGE_ACCOUNT_ID")),
+        "database_url_present": bool(os.getenv("DATABASE_URL")),
+        "environment": os.getenv("ENVIRONMENT", "development"),
+        "railway_environment": os.getenv("RAILWAY_ENVIRONMENT"),
+        "port": os.getenv("PORT", "8000")
+    }
+
+@app.post("/test/sms")
+async def test_sms_send(request: Request):
+    """Test endpoint to debug SMS sending"""
+    try:
+        data = await request.json()
+        to_number = data.get("to_number")
+        message = data.get("message", "Test message from MCP SMS Orchestrator!")
+        first_name = data.get("first_name", "Test")
+        last_name = data.get("last_name", "User")
+        
+        logger.info(f"🧪 TEST SMS REQUEST: {data}")
+        
+        if not to_number:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "to_number is required"}
+            )
+        
+        # Normalize phone number
+        normalized_number = normalize_phone_number(to_number)
+        logger.info(f"📞 Normalized number: {to_number} → {normalized_number}")
+        
+        # Check credentials
+        api_key = os.getenv("SURGE_SMS_API_KEY")
+        account_id = os.getenv("SURGE_ACCOUNT_ID")
+        
+        logger.info(f"🔑 Credentials check:")
+        logger.info(f"   API Key present: {bool(api_key)}")
+        logger.info(f"   Account ID present: {bool(account_id)}")
+        
+        if not api_key or not account_id:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": "SMS credentials not configured",
+                    "api_key_present": bool(api_key),
+                    "account_id_present": bool(account_id)
+                }
+            )
+        
+        # Send test SMS
+        success = await surge_client.send_message(normalized_number, message, first_name, last_name)
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": success,
+                "message_sent": message,
+                "to_number": normalized_number,
+                "api_key_present": bool(api_key),
+                "account_id_present": bool(account_id)
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Test SMS error: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 if __name__ == "__main__":
     import uvicorn
