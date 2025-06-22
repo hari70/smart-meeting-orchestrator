@@ -250,20 +250,25 @@ class RealMCPCalendarClient:
             # Method 4: HTTP-based MCP server call (if using MCP server)
             mcp_server_url = os.getenv("MCP_SERVER_URL", "https://mcp-bridge-service-production.up.railway.app")
             if mcp_server_url:
-                import aiohttp
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
+                import requests
+                try:
+                    response = requests.post(
                         f"{mcp_server_url}/tools/{tool_name}",
                         json=parameters,
-                        headers={"Content-Type": "application/json"}
-                    ) as response:
-                        if response.status == 200:
-                            result = await response.json()
-                            logger.info(f"✅ MCP server result: {result}")
-                            return result
-                        else:
-                            logger.error(f"❌ MCP server error: {response.status} - {await response.text()}")
-                            return {"error": f"MCP server returned {response.status}"}
+                        headers={"Content-Type": "application/json"},
+                        timeout=10
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        logger.info(f"✅ MCP server result: {result}")
+                        return result
+                    else:
+                        logger.error(f"❌ MCP server error: {response.status_code} - {response.text}")
+                        return {"error": f"MCP server returned {response.status_code}"}
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"❌ MCP server request failed: {e}")
+                    return {"error": f"MCP server request failed: {str(e)}"}
             
             logger.error(f"❌ Could not call MCP tool: {tool_name}")
             return {"error": f"MCP tool {tool_name} not available"}
