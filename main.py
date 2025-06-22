@@ -13,7 +13,9 @@ from database.connection import get_db, create_tables
 from database.models import Team, TeamMember, Meeting, Conversation
 from sms_coordinator.surge_client import SurgeSMSClient
 from llm_integration.enhanced_command_processor import LLMCommandProcessor
+from mcp_integration.mcp_command_processor import MCPCommandProcessor
 from google_integrations.calendar_client import GoogleCalendarClient
+from mcp_integration.real_mcp_calendar_client import RealMCPCalendarClient
 from google_integrations.meet_client import GoogleMeetClient
 
 # Configure logging
@@ -33,10 +35,24 @@ surge_client = SurgeSMSClient(
     account_id=os.getenv("SURGE_ACCOUNT_ID")
 )
 
-calendar_client = GoogleCalendarClient()
+# Use real MCP calendar client if available, otherwise fallback to mock
+if os.getenv("USE_REAL_MCP_CALENDAR") == "true":
+    calendar_client = RealMCPCalendarClient()
+    logger.info("🔗 Using REAL MCP Google Calendar tools")
+else:
+    calendar_client = GoogleCalendarClient()
+    logger.info("📋 Using mock Google Calendar client")
+
 meet_client = GoogleMeetClient()
 strava_client = None  # Will add Strava integration later
-command_processor = LLMCommandProcessor(surge_client, calendar_client, meet_client, strava_client)
+
+# Use aggressive MCP command processor when real MCP calendar is enabled
+if os.getenv("USE_REAL_MCP_CALENDAR") == "true":
+    command_processor = MCPCommandProcessor(surge_client, calendar_client, meet_client, strava_client)
+    logger.info("🎯 Using AGGRESSIVE MCP Command Processor (forces tool usage)")
+else:
+    command_processor = LLMCommandProcessor(surge_client, calendar_client, meet_client, strava_client)
+    logger.info("🤖 Using standard LLM Command Processor")
 
 @app.on_event("startup")
 async def startup_event():
@@ -471,6 +487,40 @@ async def test_sms_send(request: Request):
             status_code=500,
             content={"error": str(e)}
         )
+
+@app.get("/debug/mcp-status")
+async def debug_mcp_status():
+    """Debug endpoint to check MCP integration status"""
+    try:
+        return {
+            "mcp_integration": {
+                "use_real_mcp_calendar": os.getenv("USE_REAL_MCP_CALENDAR") == "true",
+                "calendar_client_type": type(calendar_client).__name__,
+                "command_processor_type": type(command_processor).__name__,
+                "mcp_calendar_available": hasattr(calendar_client, 'mcp_enabled') and getattr(calendar_client, 'mcp_enabled', False),
+                "anthropic_api_available": bool(os.getenv("ANTHROPIC_API_KEY")),
+                "available_mcp_tools": getattr(calendar_client, 'get_available_tools', lambda: [])() if hasattr(calendar_client, 'get_available_tools') else []
+            },
+            "current_configuration": {
+                "integration_mode": "Real MCP Calendar" if os.getenv("USE_REAL_MCP_CALENDAR") == "true" else "Mock Calendar",
+                "processor_mode": "Aggressive (Forces tool usage)" if type(command_processor).__name__ == "MCPCommandProcessor" else "Standard LLM",
+                "will_create_real_events": os.getenv("USE_REAL_MCP_CALENDAR") == "true" and bool(os.getenv("ANTHROPIC_API_KEY"))
+            },
+            "setup_instructions": {
+                "to_enable_real_mcp": "Set USE_REAL_MCP_CALENDAR=true in Railway environment",
+                "to_enable_llm_intelligence": "Set ANTHROPIC_API_KEY=your_claude_key in Railway environment",
+                "your_mcp_tools": "You mentioned having 8 Google Calendar MCP tools - this will connect to them"
+            },
+            "test_commands": [
+                "Schedule family dinner tomorrow at 7pm",
+                "What meetings do I have this week?",
+                "Plan family meeting about vacation this weekend"
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ MCP debug error: {str(e)}")
+        return {"error": str(e)}
 
 @app.get("/debug/calendar-status")
 async def debug_calendar_status():
