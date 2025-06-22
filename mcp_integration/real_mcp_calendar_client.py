@@ -247,68 +247,109 @@ class RealMCPCalendarClient:
             except NameError:
                 pass
             
-            # Method 4: MCP-Bridge server call (OpenAI-compatible format)
+            # Method 4: MCP-Bridge server call - Debug and find correct endpoints
             mcp_server_url = os.getenv("MCP_SERVER_URL", "https://mcp-bridge-service-production.up.railway.app")
             if mcp_server_url:
                 import requests
                 try:
-                    # Try MCP-Bridge tool execution endpoint
-                    # MCP-Bridge typically uses /tools/call or /mcp/tools/call
-                    endpoints_to_try = [
-                        f"{mcp_server_url}/tools/call",
-                        f"{mcp_server_url}/mcp/tools/call", 
-                        f"{mcp_server_url}/call_tool",
-                        f"{mcp_server_url}/api/tools/call"
+                    # First, let's discover what endpoints are available
+                    logger.info(f"🔍 Discovering MCP server endpoints at {mcp_server_url}")
+                    
+                    # Try to find documentation or available endpoints
+                    discovery_endpoints = [
+                        f"{mcp_server_url}/docs",           # OpenAPI docs
+                        f"{mcp_server_url}/openapi.json",   # OpenAPI spec  
+                        f"{mcp_server_url}/health",         # Health check
+                        f"{mcp_server_url}/tools/list",     # Tool listing
+                        f"{mcp_server_url}/mcp/tools/list", # MCP tool listing
+                        f"{mcp_server_url}/api/tools",      # API tools
+                        f"{mcp_server_url}/v1/tools",       # Versioned tools
                     ]
                     
-                    for endpoint in endpoints_to_try:
+                    available_endpoints = []
+                    for endpoint in discovery_endpoints:
                         try:
-                            # MCP-Bridge expects tool calls in this format
-                            payload = {
-                                "name": tool_name,
-                                "arguments": parameters
-                            }
-                            
-                            response = requests.post(
-                                endpoint,
-                                json=payload,
-                                headers={"Content-Type": "application/json"},
-                                timeout=10
-                            )
-                            
-                            if response.status_code == 200:
-                                result = response.json()
-                                logger.info(f"✅ MCP-Bridge result from {endpoint}: {result}")
-                                return result
-                            elif response.status_code != 404:
-                                # Non-404 error, log and continue to next endpoint
-                                logger.warning(f"⚠️ MCP endpoint {endpoint} returned {response.status_code}: {response.text[:200]}")
+                            resp = requests.get(endpoint, timeout=5)
+                            if resp.status_code == 200:
+                                available_endpoints.append(endpoint)
+                                logger.info(f"✅ Found endpoint: {endpoint} (status: {resp.status_code})")
                                 
-                        except requests.exceptions.RequestException as e:
-                            logger.warning(f"⚠️ MCP endpoint {endpoint} failed: {e}")
-                            continue
+                                # If it's tools/list, try to get the tools
+                                if "tools/list" in endpoint or "api/tools" in endpoint:
+                                    try:
+                                        tools_data = resp.json()
+                                        logger.info(f"📋 Available tools: {tools_data}")
+                                    except:
+                                        logger.info(f"📋 Tools endpoint found but couldn't parse JSON")
+                            else:
+                                logger.debug(f"❌ {endpoint}: {resp.status_code}")
+                        except:
+                            logger.debug(f"❌ {endpoint}: Connection failed")
                     
-                    # If all endpoints fail, try the original SSE endpoint for tool listing
-                    try:
-                        sse_endpoint = f"{mcp_server_url}/mcp-server/sse"
-                        logger.info(f"📝 Checking SSE endpoint for available tools: {sse_endpoint}")
-                        
-                        # Just make a simple GET to see if the endpoint exists
-                        sse_response = requests.get(sse_endpoint, timeout=5)
-                        if sse_response.status_code == 200:
-                            logger.info(f"✅ MCP SSE endpoint available at {sse_endpoint}")
-                            return {"error": f"MCP server uses SSE transport - tool execution endpoint not found. Try connecting via SSE at {sse_endpoint}"}
-                        
-                    except requests.exceptions.RequestException:
-                        pass
+                    # Now try tool execution with the discovered pattern
+                    tool_execution_endpoints = [
+                        f"{mcp_server_url}/tools/call",       # Standard
+                        f"{mcp_server_url}/mcp/tools/call",   # MCP prefixed
+                        f"{mcp_server_url}/call_tool",       # Alternative
+                        f"{mcp_server_url}/api/tools/call",   # API prefixed
+                        f"{mcp_server_url}/v1/tools/call",    # Versioned
+                        f"{mcp_server_url}/tools/execute",   # Execute variant
+                        f"{mcp_server_url}/execute",         # Simple execute
+                        f"{mcp_server_url}/tool",            # Single tool
+                        f"{mcp_server_url}/run_tool",        # Run variant
+                    ]
                     
-                    # All endpoints failed
-                    logger.error(f"❌ All MCP endpoints failed. Server might use different API format.")
-                    return {"error": "MCP server tool execution endpoints not found. Server may require different API format."}
+                    # Try different payload formats too
+                    payload_formats = [
+                        {"name": tool_name, "arguments": parameters},           # Standard MCP
+                        {"tool_name": tool_name, "parameters": parameters},     # Alternative 1
+                        {"tool": tool_name, "args": parameters},               # Alternative 2
+                        {"function": tool_name, "arguments": parameters},      # Function style
+                        {"action": tool_name, "params": parameters},           # Action style
+                        parameters  # Direct parameters
+                    ]
+                    
+                    for endpoint in tool_execution_endpoints:
+                        for i, payload in enumerate(payload_formats):
+                            try:
+                                logger.info(f"🧪 Testing {endpoint} with payload format {i+1}: {tool_name}")
+                                
+                                response = requests.post(
+                                    endpoint,
+                                    json=payload,
+                                    headers={"Content-Type": "application/json"},
+                                    timeout=10
+                                )
+                                
+                                if response.status_code == 200:
+                                    result = response.json()
+                                    logger.info(f"🎉 SUCCESS! Found working endpoint: {endpoint}")
+                                    logger.info(f"🎉 Working payload format {i+1}: {payload}")
+                                    logger.info(f"✅ MCP result: {result}")
+                                    return result
+                                elif response.status_code not in [404, 405]:  # Not "not found" or "method not allowed"
+                                    logger.info(f"🔍 {endpoint} (format {i+1}): {response.status_code} - {response.text[:100]}")
+                                    
+                            except requests.exceptions.RequestException as e:
+                                logger.debug(f"❌ {endpoint} (format {i+1}): {e}")
+                                continue
+                            
+                            # Don't try all payload formats for every endpoint - just first few
+                            if i >= 2:  # Only try first 3 formats per endpoint
+                                break
+                    
+                    # If we found available endpoints but no working tool execution, provide helpful info
+                    if available_endpoints:
+                        logger.error(f"🚨 MCP server is reachable but tool execution failed")
+                        logger.error(f"🔍 Available endpoints: {available_endpoints}")
+                        return {"error": f"MCP server reachable but tool execution format unknown. Available endpoints: {available_endpoints}"}
+                    else:
+                        logger.error(f"🚨 No standard MCP endpoints found on server")
+                        return {"error": "MCP server endpoints not found. Server may use custom API or require authentication."}
                     
                 except Exception as e:
-                    logger.error(f"❌ MCP server request failed: {e}")
-                    return {"error": f"MCP server request failed: {str(e)}"}
+                    logger.error(f"❌ MCP server discovery failed: {e}")
+                    return {"error": f"MCP server discovery failed: {str(e)}"}
             
             logger.error(f"❌ Could not call MCP tool: {tool_name}")
             return {"error": f"MCP tool {tool_name} not available"}
