@@ -247,26 +247,66 @@ class RealMCPCalendarClient:
             except NameError:
                 pass
             
-            # Method 4: HTTP-based MCP server call (if using MCP server)
+            # Method 4: MCP-Bridge server call (OpenAI-compatible format)
             mcp_server_url = os.getenv("MCP_SERVER_URL", "https://mcp-bridge-service-production.up.railway.app")
             if mcp_server_url:
                 import requests
                 try:
-                    response = requests.post(
-                        f"{mcp_server_url}/tools/{tool_name}",
-                        json=parameters,
-                        headers={"Content-Type": "application/json"},
-                        timeout=10
-                    )
+                    # Try MCP-Bridge tool execution endpoint
+                    # MCP-Bridge typically uses /tools/call or /mcp/tools/call
+                    endpoints_to_try = [
+                        f"{mcp_server_url}/tools/call",
+                        f"{mcp_server_url}/mcp/tools/call", 
+                        f"{mcp_server_url}/call_tool",
+                        f"{mcp_server_url}/api/tools/call"
+                    ]
                     
-                    if response.status_code == 200:
-                        result = response.json()
-                        logger.info(f"✅ MCP server result: {result}")
-                        return result
-                    else:
-                        logger.error(f"❌ MCP server error: {response.status_code} - {response.text}")
-                        return {"error": f"MCP server returned {response.status_code}"}
-                except requests.exceptions.RequestException as e:
+                    for endpoint in endpoints_to_try:
+                        try:
+                            # MCP-Bridge expects tool calls in this format
+                            payload = {
+                                "name": tool_name,
+                                "arguments": parameters
+                            }
+                            
+                            response = requests.post(
+                                endpoint,
+                                json=payload,
+                                headers={"Content-Type": "application/json"},
+                                timeout=10
+                            )
+                            
+                            if response.status_code == 200:
+                                result = response.json()
+                                logger.info(f"✅ MCP-Bridge result from {endpoint}: {result}")
+                                return result
+                            elif response.status_code != 404:
+                                # Non-404 error, log and continue to next endpoint
+                                logger.warning(f"⚠️ MCP endpoint {endpoint} returned {response.status_code}: {response.text[:200]}")
+                                
+                        except requests.exceptions.RequestException as e:
+                            logger.warning(f"⚠️ MCP endpoint {endpoint} failed: {e}")
+                            continue
+                    
+                    # If all endpoints fail, try the original SSE endpoint for tool listing
+                    try:
+                        sse_endpoint = f"{mcp_server_url}/mcp-server/sse"
+                        logger.info(f"📝 Checking SSE endpoint for available tools: {sse_endpoint}")
+                        
+                        # Just make a simple GET to see if the endpoint exists
+                        sse_response = requests.get(sse_endpoint, timeout=5)
+                        if sse_response.status_code == 200:
+                            logger.info(f"✅ MCP SSE endpoint available at {sse_endpoint}")
+                            return {"error": f"MCP server uses SSE transport - tool execution endpoint not found. Try connecting via SSE at {sse_endpoint}"}
+                        
+                    except requests.exceptions.RequestException:
+                        pass
+                    
+                    # All endpoints failed
+                    logger.error(f"❌ All MCP endpoints failed. Server might use different API format.")
+                    return {"error": "MCP server tool execution endpoints not found. Server may require different API format."}
+                    
+                except Exception as e:
                     logger.error(f"❌ MCP server request failed: {e}")
                     return {"error": f"MCP server request failed: {str(e)}"}
             
