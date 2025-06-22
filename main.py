@@ -472,6 +472,89 @@ async def test_sms_send(request: Request):
             content={"error": str(e)}
         )
 
+@app.get("/debug/calendar-status")
+async def debug_calendar_status():
+    """Debug endpoint to check calendar integration status"""
+    try:
+        # Check calendar client configuration
+        calendar_status = {
+            "calendar_client_type": type(calendar_client).__name__,
+            "has_mcp_tools": getattr(calendar_client, 'has_mcp_tools', False),
+            "mcp_calendar_enabled": os.getenv("ENABLE_MCP_CALENDAR") == "true",
+            "google_credentials_available": bool(os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE") or os.getenv("GOOGLE_CALENDAR_CREDENTIALS_FILE")),
+            "integration_mode": "real" if os.getenv("ENABLE_MCP_CALENDAR") == "true" else "mock"
+        }
+        
+        # Test calendar creation
+        test_start_time = datetime.now() + timedelta(hours=1)
+        test_event = await calendar_client.create_event(
+            title="Debug Test Event (Will be deleted)",
+            start_time=test_start_time,
+            duration_minutes=30,
+            attendees=[],
+            meet_link="https://test.com"
+        )
+        
+        return {
+            "calendar_integration": calendar_status,
+            "test_event_creation": {
+                "success": test_event is not None,
+                "event_data": test_event,
+                "is_mock": test_event.get("source") == "mock" if test_event else None
+            },
+            "recommendations": {
+                "current_status": "Using mock calendar - events not saved to real Google Calendar" if calendar_status["integration_mode"] == "mock" else "Real calendar integration enabled",
+                "to_enable_real_calendar": "Set ENABLE_MCP_CALENDAR=true in Railway environment variables",
+                "for_full_google_api": "Follow setup guide in /google_integrations/real_google_calendar.py"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Calendar debug error: {str(e)}")
+        return {
+            "error": str(e),
+            "calendar_client_available": calendar_client is not None
+        }
+
+@app.post("/test/create-calendar-event")
+async def test_create_calendar_event(request: Request, db: Session = Depends(get_db)):
+    """Test endpoint to manually create calendar events"""
+    try:
+        data = await request.json()
+        title = data.get("title", "Test Meeting from API")
+        hours_from_now = data.get("hours_from_now", 2)
+        
+        # Create test event
+        start_time = datetime.now() + timedelta(hours=hours_from_now)
+        
+        logger.info(f"🧪 MANUAL CALENDAR EVENT TEST:")
+        logger.info(f"   Title: {title}")
+        logger.info(f"   Start: {start_time}")
+        
+        # Create Google Meet link
+        meet_link = await meet_client.create_meeting(title)
+        
+        # Create calendar event
+        event = await calendar_client.create_event(
+            title=title,
+            start_time=start_time,
+            duration_minutes=60,
+            attendees=[],
+            meet_link=meet_link
+        )
+        
+        return {
+            "success": event is not None,
+            "event": event,
+            "meet_link": meet_link,
+            "is_mock_event": event.get("source") == "mock" if event else None,
+            "message": "Event created successfully" if event else "Event creation failed"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Manual calendar test error: {str(e)}")
+        return {"error": str(e)}
+
 @app.post("/admin/add-family-member")
 async def add_family_member_simple(request: Request, db: Session = Depends(get_db)):
     """Simple endpoint to add family members"""

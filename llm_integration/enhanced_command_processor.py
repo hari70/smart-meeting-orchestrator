@@ -261,7 +261,13 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
             start_time_str = input_data["start_time"]
             start_time = self._parse_datetime(start_time_str)
             
+            logger.info(f"🗓️ CALENDAR EVENT CREATION ATTEMPT:")
+            logger.info(f"   Title: {input_data['title']}")
+            logger.info(f"   Start time: {start_time}")
+            logger.info(f"   Duration: {input_data.get('duration_minutes', 60)} minutes")
+            
             if not start_time:
+                logger.error(f"❌ Could not parse start time: {start_time_str}")
                 return {"error": f"Could not parse start time: {start_time_str}"}
             
             # Get team members for attendees
@@ -269,10 +275,17 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
             team = db.query(Team).filter(Team.id == team_member.team_id).first()
             team_members = db.query(TeamMember).filter(TeamMember.team_id == team.id).all()
             
-            # Create Google Meet link
-            meet_link = await self.meet_client.create_meeting(input_data["title"])
+            logger.info(f"👥 Team members found: {len(team_members)}")
+            for member in team_members:
+                logger.info(f"   - {member.name} ({member.phone})")
             
-            # Create calendar event
+            # Create Google Meet link
+            logger.info(f"🔗 Creating Google Meet link...")
+            meet_link = await self.meet_client.create_meeting(input_data["title"])
+            logger.info(f"✅ Meet link created: {meet_link}")
+            
+            # Create calendar event - THIS IS THE KEY STEP
+            logger.info(f"📅 Creating calendar event via calendar client...")
             event = await self.calendar_client.create_event(
                 title=input_data["title"],
                 start_time=start_time,
@@ -281,7 +294,13 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
                 meet_link=meet_link
             )
             
+            logger.info(f"📊 Calendar client response: {event}")
+            
             if event:
+                logger.info(f"✅ Calendar event created successfully")
+                logger.info(f"   Event ID: {event.get('id')}")
+                logger.info(f"   Source: {event.get('source', 'unknown')}")
+                
                 # Save to database
                 from database.models import Meeting
                 meeting = Meeting(
@@ -296,18 +315,24 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
                 db.add(meeting)
                 db.commit()
                 
+                logger.info(f"💾 Meeting saved to database with ID: {meeting.id}")
+                
                 return {
                     "success": True,
                     "event_id": event.get("id"),
                     "title": input_data["title"],
                     "start_time": start_time.strftime("%A, %B %d at %I:%M %p"),
                     "meet_link": meet_link,
-                    "attendees_count": len(team_members)
+                    "attendees_count": len(team_members),
+                    "calendar_source": event.get("source", "unknown"),
+                    "real_calendar_event": event.get("source") != "mock"
                 }
-            
-            return {"success": False, "error": "Failed to create calendar event"}
+            else:
+                logger.error(f"❌ Calendar client returned None/False")
+                return {"success": False, "error": "Calendar client failed to create event"}
             
         except Exception as e:
+            logger.error(f"❌ Calendar event creation failed: {str(e)}", exc_info=True)
             return {"error": f"Calendar event creation failed: {str(e)}"}
     
     async def _tool_list_events(self, input_data: Dict, team_member, db) -> Dict:

@@ -77,7 +77,9 @@ class GoogleCalendarClient:
     async def _create_event_mock(self, title: str, start_time: datetime, duration_minutes: int, 
                                 attendees: List[str], meet_link: str) -> Dict:
         """Create mock event for development/testing"""
-        logger.info(f"📅 Creating mock calendar event: {title} at {start_time}")
+        logger.warning(f"⚠️  [MOCK MODE] Creating mock calendar event: {title} at {start_time}")
+        logger.warning(f"⚠️  THIS IS NOT SAVED TO REAL GOOGLE CALENDAR!")
+        logger.info(f"🔧 To enable real calendar events, set ENABLE_MCP_CALENDAR=true in Railway")
         
         event_data = {
             "id": f"mock_event_{int(start_time.timestamp())}",
@@ -87,7 +89,8 @@ class GoogleCalendarClient:
             "attendees": attendees or [],
             "meet_link": meet_link,
             "calendar_link": f"https://calendar.google.com/calendar/u/0/r/day/{start_time.strftime('%Y/%m/%d')}",
-            "source": "mock"
+            "source": "mock",
+            "warning": "MOCK EVENT - Not saved to real Google Calendar"
         }
         
         return event_data
