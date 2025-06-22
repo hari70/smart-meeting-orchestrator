@@ -15,6 +15,7 @@ from sms_coordinator.surge_client import SurgeSMSClient
 from llm_integration.enhanced_command_processor import LLMCommandProcessor
 from mcp_integration.mcp_command_processor import MCPCommandProcessor
 from google_integrations.calendar_client import GoogleCalendarClient
+from google_integrations.direct_google_calendar import DirectGoogleCalendarClient
 from mcp_integration.real_mcp_calendar_client import RealMCPCalendarClient
 from google_integrations.meet_client import GoogleMeetClient
 
@@ -35,8 +36,11 @@ surge_client = SurgeSMSClient(
     account_id=os.getenv("SURGE_ACCOUNT_ID")
 )
 
-# Use real MCP calendar client if available, otherwise fallback to mock
-if os.getenv("USE_REAL_MCP_CALENDAR") == "true":
+# Initialize calendar client - priority order: Direct Google API > Real MCP > Mock
+if os.getenv("USE_DIRECT_GOOGLE_CALENDAR") == "true":
+    calendar_client = DirectGoogleCalendarClient()
+    logger.info("🔗 Using DIRECT Google Calendar API integration")
+elif os.getenv("USE_REAL_MCP_CALENDAR") == "true":
     calendar_client = RealMCPCalendarClient()
     logger.info("🔗 Using REAL MCP Google Calendar tools")
 else:

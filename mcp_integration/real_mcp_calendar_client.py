@@ -73,24 +73,15 @@ class RealMCPCalendarClient:
             
             # Call real MCP Google Calendar create_event tool
             # This is the actual MCP tool call
-            event_data = await self._call_mcp_tool("google_calendar_create_event", {
+            event_data = await self._call_mcp_tool("google-calendar:create_gcal_event", {
+                "calendar_id": "primary",
                 "summary": title,
-                "start": {
-                    "dateTime": start_iso,
-                    "timeZone": "America/New_York"  # Adjust as needed
-                },
-                "end": {
-                    "dateTime": end_iso,
-                    "timeZone": "America/New_York"
-                },
+                "start": start_iso,
+                "end": end_iso,
+                "time_zone": "America/New_York",
                 "attendees": attendee_list,
                 "description": f"Created via SMS\\n{f'Meeting link: {meet_link}' if meet_link else ''}",
-                "conferenceData": {
-                    "createRequest": {
-                        "requestId": f"sms_{int(start_time.timestamp())}",
-                        "conferenceSolutionKey": {"type": "hangoutsMeet"}
-                    }
-                } if not meet_link else None
+                "location": None
             })
             
             if event_data and not event_data.get("error"):
@@ -130,12 +121,11 @@ class RealMCPCalendarClient:
             time_max = (now + timedelta(days=days_ahead)).isoformat() + 'Z'
             
             # Call real MCP Google Calendar list_events tool
-            events_data = await self._call_mcp_tool("google_calendar_list_events", {
-                "timeMin": time_min,
-                "timeMax": time_max,
-                "maxResults": limit,
-                "singleEvents": True,
-                "orderBy": "startTime"
+            events_data = await self._call_mcp_tool("google-calendar:list_gcal_events", {
+                "calendar_id": "primary",
+                "time_min": time_min,
+                "time_max": time_max,
+                "max_results": limit
             })
             
             if events_data and not events_data.get("error"):
@@ -173,10 +163,10 @@ class RealMCPCalendarClient:
             time_max = (now + timedelta(days=7)).isoformat() + 'Z'
             
             # Call real MCP Google Calendar freebusy tool
-            freebusy_data = await self._call_mcp_tool("google_calendar_freebusy", {
-                "timeMin": time_min,
-                "timeMax": time_max,
-                "items": [{"id": email} for email in attendees if email and '@' in email]
+            freebusy_data = await self._call_mcp_tool("google-calendar:find_free_time", {
+                "calendar_ids": ["primary"],
+                "time_min": time_min,
+                "time_max": time_max
             })
             
             if freebusy_data and not freebusy_data.get("error"):
@@ -214,8 +204,9 @@ class RealMCPCalendarClient:
         
         try:
             # Call real MCP Google Calendar delete_event tool
-            result = await self._call_mcp_tool("google_calendar_delete_event", {
-                "eventId": event_id
+            result = await self._call_mcp_tool("google-calendar:delete_gcal_event", {
+                "calendar_id": "primary",
+                "event_id": event_id
             })
             
             return not result.get("error") if result else False
@@ -245,11 +236,11 @@ class RealMCPCalendarClient:
             # Method 3: Try Claude Desktop MCP pattern
             try:
                 # In Claude Desktop with MCP tools, you might have:
-                if tool_name == "google_calendar_create_event":
+                if tool_name == "google-calendar:create_gcal_event":
                     # This would be replaced with actual MCP call
                     result = await google_calendar_create_event(**parameters)
                     return result
-                elif tool_name == "google_calendar_list_events":
+                elif tool_name == "google-calendar:list_gcal_events":
                     result = await google_calendar_list_events(**parameters) 
                     return result
                 # ... etc for other tools
@@ -257,18 +248,22 @@ class RealMCPCalendarClient:
                 pass
             
             # Method 4: HTTP-based MCP server call (if using MCP server)
-            mcp_server_url = os.getenv("MCP_SERVER_URL")
+            mcp_server_url = os.getenv("MCP_SERVER_URL", "https://mcp-bridge-service-production.up.railway.app")
             if mcp_server_url:
                 import aiohttp
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
                         f"{mcp_server_url}/tools/{tool_name}",
-                        json=parameters
+                        json=parameters,
+                        headers={"Content-Type": "application/json"}
                     ) as response:
                         if response.status == 200:
                             result = await response.json()
                             logger.info(f"✅ MCP server result: {result}")
                             return result
+                        else:
+                            logger.error(f"❌ MCP server error: {response.status} - {await response.text()}")
+                            return {"error": f"MCP server returned {response.status}"}
             
             logger.error(f"❌ Could not call MCP tool: {tool_name}")
             return {"error": f"MCP tool {tool_name} not available"}
@@ -281,12 +276,12 @@ class RealMCPCalendarClient:
         """Get list of available MCP Google Calendar tools"""
         # You mentioned you have 8 tools - return them here
         return [
-            "google_calendar_create_event",
-            "google_calendar_list_events", 
-            "google_calendar_get_event",
-            "google_calendar_update_event",
-            "google_calendar_delete_event",
-            "google_calendar_freebusy",
-            "google_calendar_list_calendars",
-            "google_calendar_search_events"
+            "google-calendar:create_gcal_event",
+            "google-calendar:list_gcal_events", 
+            "google-calendar:fetch_gcal_event",
+            "google-calendar:update_gcal_event",
+            "google-calendar:delete_gcal_event",
+            "google-calendar:find_free_time",
+            "google-calendar:list_gcal_calendars",
+            "google-calendar:search_gcal_events"
         ]
