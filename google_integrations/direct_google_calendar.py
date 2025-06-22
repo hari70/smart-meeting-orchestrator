@@ -255,7 +255,7 @@ class DirectGoogleCalendarClient:
         }
 
 # Quick setup instructions
-SETUP_INSTRUCTIONS = \"\"\"
+SETUP_INSTRUCTIONS = """
 🚀 QUICK GOOGLE CALENDAR API SETUP
 
 To create REAL calendar events (bypassing MCP):
@@ -283,7 +283,7 @@ To create REAL calendar events (bypassing MCP):
    Result: REAL Google Calendar event created!
 
 ⚡ FASTER OPTION: Use existing OAuth tokens from your local setup
-\"\"\"
+"""
 
 if __name__ == "__main__":
     print(SETUP_INSTRUCTIONS)
