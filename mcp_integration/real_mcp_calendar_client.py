@@ -342,14 +342,92 @@ class RealMCPCalendarClient:
                     if available_endpoints:
                         logger.error(f"🚨 MCP server is reachable but tool execution failed")
                         logger.error(f"🔍 Available endpoints: {available_endpoints}")
-                        return {"error": f"MCP server reachable but tool execution format unknown. Available endpoints: {available_endpoints}"}
                     else:
                         logger.error(f"🚨 No standard MCP endpoints found on server")
-                        return {"error": "MCP server endpoints not found. Server may use custom API or require authentication."}
+                    
+                    # Fall through to backup method below
                     
                 except Exception as e:
                     logger.error(f"❌ MCP server discovery failed: {e}")
-                    return {"error": f"MCP server discovery failed: {str(e)}"}
+                    # Fall through to backup method below
+            
+            # Method 5: Fallback to Direct Google Calendar API when MCP fails
+            logger.warning(f"⚠️ MCP server failed, falling back to direct Google Calendar API")
+            
+            # Import and use the direct Google Calendar client as fallback
+            try:
+                from google_integrations.direct_google_calendar import DirectGoogleCalendarClient
+                direct_client = DirectGoogleCalendarClient()
+                
+                if tool_name == "google-calendar:create_gcal_event":
+                    logger.info(f"🔄 Fallback: Creating event via Direct Google Calendar API")
+                    
+                    # Convert MCP parameters to direct API parameters
+                    title = parameters.get("summary", "SMS Event")
+                    
+                    # Parse start time
+                    start_str = parameters.get("start")
+                    if start_str:
+                        try:
+                            from datetime import datetime
+                            if isinstance(start_str, str):
+                                # Try to parse ISO format
+                                if 'T' in start_str:
+                                    start_time = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                                else:
+                                    # Fallback to tomorrow 7pm
+                                    start_time = datetime.now().replace(hour=19, minute=0, second=0, microsecond=0)
+                                    if start_time <= datetime.now():
+                                        start_time = start_time.replace(day=start_time.day + 1)
+                            else:
+                                start_time = datetime.now().replace(hour=19, minute=0, second=0, microsecond=0)
+                        except:
+                            start_time = datetime.now().replace(hour=19, minute=0, second=0, microsecond=0)
+                    else:
+                        start_time = datetime.now().replace(hour=19, minute=0, second=0, microsecond=0)
+                    
+                    # Duration
+                    duration = 60  # Default 1 hour
+                    
+                    # Attendees
+                    attendees = []
+                    if parameters.get("attendees"):
+                        attendees = [a.get("email") for a in parameters["attendees"] if a.get("email")]
+                    
+                    # Call direct Google Calendar API
+                    result = await direct_client.create_event(
+                        title=title,
+                        start_time=start_time,
+                        duration_minutes=duration,
+                        attendees=attendees
+                    )
+                    
+                    if result:
+                        logger.info(f"✅ Direct Google Calendar API success: {result.get('title')}")
+                        return result
+                    else:
+                        logger.error(f"❌ Direct Google Calendar API also failed")
+                        return {"error": "Both MCP and Direct Google Calendar API failed"}
+                        
+                elif tool_name == "google-calendar:list_gcal_events":
+                    logger.info(f"🔄 Fallback: Listing events via Direct Google Calendar API")
+                    
+                    days_ahead = parameters.get("days_ahead", 7)
+                    limit = parameters.get("max_results", 10)
+                    
+                    events = await direct_client.list_events(days_ahead=days_ahead, limit=limit)
+                    return {"success": True, "events": events}
+                    
+                else:
+                    logger.warning(f"⚠️ Tool {tool_name} not supported in direct fallback")
+                    return {"error": f"Tool {tool_name} not available in fallback mode"}
+                    
+            except ImportError as e:
+                logger.error(f"❌ Direct Google Calendar fallback not available: {e}")
+                return {"error": "MCP failed and direct Google Calendar fallback not available"}
+            except Exception as e:
+                logger.error(f"❌ Direct Google Calendar fallback failed: {e}")
+                return {"error": f"Direct Google Calendar fallback failed: {str(e)}"}
             
             logger.error(f"❌ Could not call MCP tool: {tool_name}")
             return {"error": f"MCP tool {tool_name} not available"}
