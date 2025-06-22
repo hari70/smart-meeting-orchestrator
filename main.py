@@ -12,7 +12,7 @@ import re
 from database.connection import get_db, create_tables
 from database.models import Team, TeamMember, Meeting, Conversation
 from sms_coordinator.surge_client import SurgeSMSClient
-from sms_coordinator.command_processor import CommandProcessor
+from llm_integration.enhanced_command_processor import LLMCommandProcessor
 from google_integrations.calendar_client import GoogleCalendarClient
 from google_integrations.meet_client import GoogleMeetClient
 
@@ -35,7 +35,8 @@ surge_client = SurgeSMSClient(
 
 calendar_client = GoogleCalendarClient()
 meet_client = GoogleMeetClient()
-command_processor = CommandProcessor(surge_client, calendar_client, meet_client)
+strava_client = None  # Will add Strava integration later
+command_processor = LLMCommandProcessor(surge_client, calendar_client, meet_client, strava_client)
 
 @app.on_event("startup")
 async def startup_event():
@@ -158,8 +159,8 @@ async def process_sms_command(from_number: str, message_text: str, first_name: s
         # Update conversation context
         update_conversation_context(conversation, message_text, db)
         
-        # Process command using CommandProcessor
-        response = await command_processor.process_command(
+        # Process command using Enhanced LLM CommandProcessor
+        response = await command_processor.process_command_with_llm(
             message_text=message_text,
             team_member=team_member,
             conversation=conversation,
@@ -466,6 +467,112 @@ async def test_sms_send(request: Request):
         
     except Exception as e:
         logger.error(f"❌ Test SMS error: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+@app.post("/admin/add-family-member")
+async def add_family_member_simple(request: Request, db: Session = Depends(get_db)):
+    """Simple endpoint to add family members"""
+    try:
+        data = await request.json()
+        name = data.get("name")
+        phone = data.get("phone")
+        
+        if not name or not phone:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "name and phone are required"}
+            )
+        
+        # Normalize phone number
+        normalized_phone = normalize_phone_number(phone)
+        
+        # Get or create Family team
+        team = db.query(Team).filter(Team.name == "Family").first()
+        if not team:
+            team = Team(name="Family")
+            db.add(team)
+            db.commit()
+            db.refresh(team)
+        
+        # Check if member already exists
+        existing_member = db.query(TeamMember).filter(
+            TeamMember.phone == normalized_phone
+        ).first()
+        
+        if existing_member:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": f"{existing_member.name} with phone {normalized_phone} already exists"
+                }
+            )
+        
+        # Create new team member
+        member = TeamMember(
+            team_id=team.id,
+            name=name,
+            phone=normalized_phone,
+            is_admin=data.get("is_admin", False)
+        )
+        
+        db.add(member)
+        db.commit()
+        db.refresh(member)
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "member": {
+                    "id": str(member.id),
+                    "name": member.name,
+                    "phone": member.phone,
+                    "team": team.name
+                }
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error adding family member: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+@app.get("/admin/family-members")
+async def list_family_members(db: Session = Depends(get_db)):
+    """List all family members"""
+    try:
+        team = db.query(Team).filter(Team.name == "Family").first()
+        if not team:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "No Family team found"}
+            )
+        
+        members = db.query(TeamMember).filter(TeamMember.team_id == team.id).all()
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "team": team.name,
+                "members": [
+                    {
+                        "id": str(member.id),
+                        "name": member.name,
+                        "phone": member.phone,
+                        "is_admin": member.is_admin
+                    }
+                    for member in members
+                ]
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error listing family members: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={"error": str(e)}
