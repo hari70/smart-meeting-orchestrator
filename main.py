@@ -616,6 +616,7 @@ async def add_family_member_simple(request: Request, db: Session = Depends(get_d
         data = await request.json()
         name = data.get("name")
         phone = data.get("phone")
+        email = data.get("email")  # Added email field
         
         if not name or not phone:
             return JSONResponse(
@@ -652,6 +653,7 @@ async def add_family_member_simple(request: Request, db: Session = Depends(get_d
             team_id=team.id,
             name=name,
             phone=normalized_phone,
+            email=email,  # Include email
             is_admin=data.get("is_admin", False)
         )
         
@@ -693,20 +695,21 @@ async def list_family_members(db: Session = Depends(get_db)):
         members = db.query(TeamMember).filter(TeamMember.team_id == team.id).all()
         
         return JSONResponse(
-            status_code=200,
-            content={
-                "team": team.name,
-                "members": [
-                    {
-                        "id": str(member.id),
-                        "name": member.name,
-                        "phone": member.phone,
-                        "is_admin": member.is_admin
-                    }
-                    for member in members
-                ]
+        status_code=200,
+        content={
+        "team": team.name,
+        "members": [
+        {
+        "id": str(member.id),
+        "name": member.name,
+        "phone": member.phone,
+        "email": member.email,  # Include email
+            "is_admin": member.is_admin
+        }
+            for member in members
+            ]
             }
-        )
+            )
         
     except Exception as e:
         logger.error(f"❌ Error listing family members: {str(e)}")
@@ -714,6 +717,78 @@ async def list_family_members(db: Session = Depends(get_db)):
             status_code=500,
             content={"error": str(e)}
         )
+
+@app.post("/admin/migrate-database")
+async def migrate_database():
+    """Run database migrations"""
+    try:
+        from database.migrations.add_email_column import add_email_column
+        
+        success = add_email_column()
+        
+        if success:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "success": True,
+                    "message": "✅ Email column added successfully! You can now add family members with email addresses."
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "message": "❌ Migration failed. Check server logs for details."
+                }
+            )
+            
+    except Exception as e:
+        logger.error(f"❌ Migration error: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+@app.get("/admin/check-database-schema")
+async def check_database_schema():
+    """Check current database schema"""
+    try:
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            return {"error": "DATABASE_URL not set"}
+        
+        from sqlalchemy import create_engine, text
+        engine = create_engine(database_url)
+        
+        with engine.connect() as connection:
+            # Get team_members table columns
+            query = text("""
+                SELECT column_name, data_type, is_nullable 
+                FROM information_schema.columns 
+                WHERE table_name = 'team_members'
+                ORDER BY ordinal_position
+            """)
+            
+            result = connection.execute(query)
+            columns = [{
+                "name": row[0],
+                "type": row[1], 
+                "nullable": row[2]
+            } for row in result]
+            
+            has_email = any(col["name"] == "email" for col in columns)
+            
+            return {
+                "table": "team_members",
+                "columns": columns,
+                "has_email_column": has_email,
+                "needs_migration": not has_email
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Schema check error: {str(e)}")
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

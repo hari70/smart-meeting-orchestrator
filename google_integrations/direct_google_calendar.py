@@ -14,19 +14,41 @@ logger = logging.getLogger(__name__)
 class DirectGoogleCalendarClient:
     def __init__(self):
         """Initialize direct Google Calendar API client"""
+        # Debug: Show what environment variables are available
+        logger.info(f"🔍 Checking Google Calendar environment variables...")
+        
         self.access_token = os.getenv("GOOGLE_CALENDAR_ACCESS_TOKEN")
         self.refresh_token = os.getenv("GOOGLE_CALENDAR_REFRESH_TOKEN") 
         self.client_id = os.getenv("GOOGLE_CALENDAR_CLIENT_ID")
         self.client_secret = os.getenv("GOOGLE_CALENDAR_CLIENT_SECRET")
         self.calendar_id = os.getenv("GOOGLE_CALENDAR_ID", "primary")
         
+        # Debug logging (without exposing full tokens)
+        logger.info(f"🔑 GOOGLE_CALENDAR_ACCESS_TOKEN: {'SET' if self.access_token else 'NOT SET'}")
+        logger.info(f"🔑 GOOGLE_CALENDAR_REFRESH_TOKEN: {'SET' if self.refresh_token else 'NOT SET'}")
+        logger.info(f"🔑 GOOGLE_CALENDAR_CLIENT_ID: {'SET' if self.client_id else 'NOT SET'}")
+        logger.info(f"🔑 GOOGLE_CALENDAR_CLIENT_SECRET: {'SET' if self.client_secret else 'NOT SET'}")
+        logger.info(f"🔑 GOOGLE_CALENDAR_ID: {self.calendar_id}")
+        
+        # Also check alternative environment variable names that might be used
+        alt_vars = [
+            "GOOGLE_ACCESS_TOKEN", "GOOGLE_API_KEY", "GOOGLE_OAUTH_TOKEN",
+            "CALENDAR_ACCESS_TOKEN", "CALENDAR_API_KEY"
+        ]
+        for var in alt_vars:
+            value = os.getenv(var)
+            if value:
+                logger.info(f"🔍 Found alternative env var {var}: SET")
+        
         self.base_url = "https://www.googleapis.com/calendar/v3"
         self.enabled = bool(self.access_token or (self.refresh_token and self.client_id))
         
         if self.enabled:
             logger.info("✅ Direct Google Calendar API integration enabled")
+            logger.info(f"📅 Will create REAL events in calendar: {self.calendar_id}")
         else:
             logger.info("📝 Direct Google Calendar API not configured - using mock mode")
+            logger.info("💡 To enable real events, set GOOGLE_CALENDAR_ACCESS_TOKEN or (GOOGLE_CALENDAR_REFRESH_TOKEN + GOOGLE_CALENDAR_CLIENT_ID)")
     
     async def create_event(self, title: str, start_time: datetime, duration_minutes: int = 60, 
                           attendees: List[str] = None, meet_link: str = None) -> Optional[Dict]:

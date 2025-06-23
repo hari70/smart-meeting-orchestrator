@@ -20,6 +20,7 @@ class TeamMember(Base):
     team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"))
     name = Column(String(100), nullable=False)
     phone = Column(String(20), nullable=False)
+    email = Column(String(255))  # Added email field for calendar invites
     google_calendar_id = Column(String(100))
     preferences = Column(JSON, default={})
     is_admin = Column(Boolean, default=False)

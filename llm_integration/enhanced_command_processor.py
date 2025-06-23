@@ -286,11 +286,16 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
             
             # Create calendar event - THIS IS THE KEY STEP
             logger.info(f"📅 Creating calendar event via calendar client...")
+            
+            # Use emails for attendees (skip the event creator to avoid duplicate)
+            attendee_emails = [member.email for member in team_members if member.email and member.phone != team_member.phone]
+            logger.info(f"👥 Attendee emails: {attendee_emails}")
+            
             event = await self.calendar_client.create_event(
                 title=input_data["title"],
                 start_time=start_time,
                 duration_minutes=input_data.get("duration_minutes", 60),
-                attendees=[member.google_calendar_id for member in team_members if member.google_calendar_id],
+                attendees=attendee_emails,
                 meet_link=meet_link
             )
             
