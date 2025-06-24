@@ -283,6 +283,7 @@ ACTION REQUIRED NOW."""
     def _extract_meeting_time(self, message: str) -> datetime:
         """Extract meeting time from message with proper parsing"""
         
+        logger.info(f"🕰️ [MCP DATETIME DEBUG] Original input: '{message}'")
         logger.info(f"🕰️ [MCP] Parsing datetime string: '{message}'")
         
         try:

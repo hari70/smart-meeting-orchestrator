@@ -36,14 +36,10 @@ surge_client = SurgeSMSClient(
     account_id=os.getenv("SURGE_ACCOUNT_ID")
 )
 
-# Initialize calendar client - Real MCP integration only (mock mode removed)
-if os.getenv("USE_DIRECT_GOOGLE_CALENDAR") == "true":
-    calendar_client = DirectGoogleCalendarClient()
-    logger.info("🔗 Using DIRECT Google Calendar API integration")
-else:
-    # Always use real MCP calendar integration - no mock mode
-    calendar_client = RealMCPCalendarClient()
-    logger.info("🔗 Using REAL MCP Google Calendar tools (mock mode removed)")
+# Initialize calendar client - Always use MCP tools (no direct API)
+# Since you have 8 Google Calendar MCP tools, let's use those instead of direct API
+calendar_client = RealMCPCalendarClient()
+logger.info("🔗 Using YOUR 8 MCP Google Calendar tools (direct API disabled)")
 
 meet_client = GoogleMeetClient()
 strava_client = None  # Will add Strava integration later
@@ -99,6 +95,7 @@ async def sms_webhook(request: Request, db: Session = Depends(get_db)):
         last_name = contact_data.get("last_name", "")
         
         logger.info(f"📱 STEP 2: Extracted SMS data - From: {from_number}, Message: '{message_text}', Name: {first_name} {last_name}")
+        logger.info(f"🔍 [SMS DEBUG] Raw message text received: '{message_text}'")
         
         if not from_number or not message_text:
             logger.warning("❌ STEP 2 FAILED: Invalid Surge SMS webhook payload received")

@@ -21,32 +21,11 @@ class RealMCPCalendarClient:
             logger.warning("⚠️ MCP Google Calendar tools not available")
     
     def _detect_mcp_tools(self) -> bool:
-        """Detect if MCP Google Calendar tools are available"""
-        try:
-            # In a real MCP environment (like Claude Desktop), 
-            # you'd have access to the MCP tool registry
-            # For now, we'll check if we're in that environment
-            
-            # Check if we're running in an MCP-enabled environment
-            if hasattr(__builtins__, 'mcp_tools') or os.getenv("MCP_CALENDAR_AVAILABLE") == "true":
-                return True
-            
-            # Alternative check - see if specific MCP functions are available
-            try:
-                import inspect
-                frame = inspect.currentframe()
-                while frame:
-                    if 'google_calendar' in frame.f_globals:
-                        return True
-                    frame = frame.f_back
-            except:
-                pass
-            
-            return False
-            
-        except Exception as e:
-            logger.error(f"Error detecting MCP tools: {e}")
-            return False
+        """Assume MCP Google Calendar tools are available - user has 8 tools"""
+        # Since you have 8 Google Calendar MCP tools, let's assume they're available
+        # and let the actual tool calls determine if they work
+        logger.info("🎯 Assuming your 8 MCP Google Calendar tools are available")
+        return True
     
     async def create_event(self, title: str, start_time: datetime, duration_minutes: int = 60, 
                           attendees: List[str] = None, meet_link: str = None) -> Optional[Dict]:
@@ -352,7 +331,7 @@ class RealMCPCalendarClient:
                     # Fall through to backup method below
             
             # Method 5: Fallback to Direct Google Calendar API when MCP fails
-            logger.warning(f"⚠️ MCP server failed, falling back to direct Google Calendar API")
+            logger.warning(f"⚠️ MCP server failed, falling back to Direct Google Calendar API with Railway credentials")
             
             # Import and use the direct Google Calendar client as fallback
             try:
@@ -429,8 +408,8 @@ class RealMCPCalendarClient:
                 logger.error(f"❌ Direct Google Calendar fallback failed: {e}")
                 return {"error": f"Direct Google Calendar fallback failed: {str(e)}"}
             
-            logger.error(f"❌ Could not call MCP tool: {tool_name}")
-            return {"error": f"MCP tool {tool_name} not available"}
+            logger.error(f"❌ Could not call MCP tool: {tool_name} - No fallback available")
+            return {"error": f"MCP tool {tool_name} not available - ensure your 8 MCP Google Calendar tools are properly connected"}
             
         except Exception as e:
             logger.error(f"❌ Error calling MCP tool {tool_name}: {e}")

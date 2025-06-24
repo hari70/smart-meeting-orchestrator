@@ -456,6 +456,7 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
     def _parse_datetime(self, time_str: str) -> Optional[datetime]:
         """Parse various datetime formats"""
         
+        logger.info(f"🕰️ [DATETIME DEBUG] Original input string: '{time_str}'")
         logger.info(f"🕰️ Parsing datetime string: '{time_str}'")
         
         try:
