@@ -286,8 +286,14 @@ ACTION REQUIRED NOW."""
         logger.info(f"🕰️ [MCP] Parsing datetime string: '{message}'")
         
         try:
-            # Parse natural language date/time
-            now = datetime.now()
+            # Use consistent timezone (America/New_York) instead of server time
+            import pytz
+            eastern = pytz.timezone('America/New_York')
+            now = datetime.now(eastern)
+            
+            logger.info(f"🌍 [MCP] Using timezone: America/New_York")
+            logger.info(f"🕰️ [MCP] Current time in timezone: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}")
+            
             time_lower = message.lower().strip()
             
             logger.info(f"🔍 [MCP] Processing natural language: '{time_lower}'")
@@ -296,10 +302,10 @@ ACTION REQUIRED NOW."""
             base_date = None
             if "tomorrow" in time_lower:
                 base_date = (now + timedelta(days=1)).date()
-                logger.info(f"📅 [MCP] Date: tomorrow = {base_date}")
+                logger.info(f"📅 [MCP] Date: tomorrow = {base_date} ({(now + timedelta(days=1)).strftime('%A')})")
             elif "today" in time_lower:
                 base_date = now.date()
-                logger.info(f"📅 [MCP] Date: today = {base_date}")
+                logger.info(f"📅 [MCP] Date: today = {base_date} ({now.strftime('%A')})")
             elif "weekend" in time_lower or "saturday" in time_lower:
                 # Next Saturday
                 days_until_saturday = (5 - now.weekday()) % 7
@@ -392,17 +398,31 @@ ACTION REQUIRED NOW."""
                     logger.warning(f"⚠️ [MCP] No time found in '{message}', defaulting to 7:00 PM")
             
             # Combine date and time
-            result = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
-            logger.info(f"✅ [MCP] Final parsed datetime: {result.strftime('%A, %B %d, %Y at %I:%M %p')}")
+            # Create as naive datetime first, then localize to Eastern
+            naive_dt = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
+            result = eastern.localize(naive_dt)
             
-            return result
+            logger.info(f"✅ [MCP] Final parsed datetime: {result.strftime('%A, %B %d, %Y at %I:%M %p %Z')}")
+            
+            # Return as naive datetime for compatibility with existing code
+            return result.replace(tzinfo=None)
             
         except Exception as e:
             logger.error(f"❌ [MCP] Failed to parse datetime: {message}, error: {e}")
-            # Return tomorrow at 7 PM as fallback
-            fallback = datetime.combine((datetime.now() + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
-            logger.warning(f"⚠️ [MCP] Using fallback datetime: {fallback}")
-            return fallback
+            # Return tomorrow at 7 PM as fallback (using Eastern time)
+            try:
+                import pytz
+                eastern = pytz.timezone('America/New_York')
+                now = datetime.now(eastern)
+                fallback_naive = datetime.combine((now + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
+                fallback = eastern.localize(fallback_naive).replace(tzinfo=None)
+                logger.warning(f"⚠️ [MCP] Using fallback datetime: {fallback}")
+                return fallback
+            except:
+                # Ultimate fallback
+                fallback = datetime.combine((datetime.now() + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
+                logger.warning(f"⚠️ [MCP] Using ultimate fallback datetime: {fallback}")
+                return fallback
     
     async def _execute_action_tool(self, tool_name: str, tool_input: Dict, team_member, db) -> Dict:
         """Execute tools with real MCP calendar integration"""
