@@ -296,8 +296,20 @@ ACTION REQUIRED NOW."""
             # Extract date part
             base_date = None
             if "tomorrow" in time_lower:
+                logger.info(f"😨 [MCP DATE BUG DEBUG] Found 'tomorrow' in input: '{time_lower}'")
+                logger.info(f"📅 [MCP DATE BUG DEBUG] Current datetime object: {now}")
+                logger.info(f"📅 [MCP DATE BUG DEBUG] Current date: {now.date()}")
+                logger.info(f"📅 [MCP DATE BUG DEBUG] Current weekday: {now.weekday()} (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun)")
+                
                 tomorrow = now + timedelta(days=1)
+                logger.info(f"📅 [MCP DATE BUG DEBUG] After adding 1 day: {tomorrow}")
+                logger.info(f"📅 [MCP DATE BUG DEBUG] Tomorrow date object: {tomorrow.date()}")
+                logger.info(f"📅 [MCP DATE BUG DEBUG] Tomorrow weekday: {tomorrow.weekday()}")
+                
                 base_date = tomorrow.date()
+                logger.info(f"📅 [MCP DATE BUG DEBUG] Final base_date: {base_date}")
+                logger.info(f"📅 [MCP DATE BUG DEBUG] Final base_date formatted: {base_date.strftime('%A, %B %d, %Y')}")
+                
                 logger.info(f"📅 [MCP] TOMORROW CALCULATION:")
                 logger.info(f"   Today is {now.strftime('%A %B %d, %Y')}")
                 logger.info(f"   Tomorrow will be {tomorrow.strftime('%A %B %d, %Y')}")
@@ -397,8 +409,26 @@ ACTION REQUIRED NOW."""
                     logger.warning(f"⚠️ [MCP] No time found in '{message}', defaulting to 7:00 PM")
             
             # Combine date and time
+            logger.info(f"📅 [MCP FINAL DEBUG] About to combine date and time:")
+            logger.info(f"   base_date: {base_date}")
+            logger.info(f"   hour: {hour}, minute: {minute}")
+            
             result = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
+            
+            logger.info(f"📅 [MCP FINAL DEBUG] Combined result: {result}")
+            logger.info(f"📅 [MCP FINAL DEBUG] Result weekday: {result.weekday()} (0=Mon, 1=Tue, 2=Wed)")
             logger.info(f"✅ [MCP] Final parsed datetime: {result.strftime('%A, %B %d, %Y at %I:%M %p')}")
+            
+            # Double-check the math
+            if "tomorrow" in message.lower():
+                expected_date = (datetime.now() + timedelta(days=1)).date()
+                if result.date() != expected_date:
+                    logger.error(f"🐛 [MCP] BUG DETECTED!")
+                    logger.error(f"   Expected tomorrow: {expected_date} ({expected_date.strftime('%A')})")
+                    logger.error(f"   Actually got: {result.date()} ({result.strftime('%A')})")
+                    logger.error(f"   Difference: {(result.date() - expected_date).days} days")
+                else:
+                    logger.info(f"✅ [MCP] Date calculation verified correct for 'tomorrow'")
             
             return result
             

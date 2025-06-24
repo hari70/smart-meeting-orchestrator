@@ -309,6 +309,14 @@ class DirectGoogleCalendarClient:
             return
         
         try:
+            # Detailed credential debugging
+            logger.info(f"🔍 [CREDENTIAL DEBUG] About to attempt token refresh...")
+            logger.info(f"   Refresh token length: {len(self.refresh_token) if self.refresh_token else 0}")
+            logger.info(f"   Refresh token starts with: {self.refresh_token[:15]}..." if self.refresh_token and len(self.refresh_token) > 15 else f"   Refresh token: INVALID")
+            logger.info(f"   Client ID ends with: ...{self.client_id[-30:]}" if self.client_id and len(self.client_id) > 30 else f"   Client ID: {self.client_id}")
+            logger.info(f"   Client secret length: {len(self.client_secret) if self.client_secret else 0}")
+            logger.info(f"   Expected client ID format: xxxxx.apps.googleusercontent.com")
+            
             logger.info("🔄 Attempting to refresh access token...")
             
             data = {
@@ -342,7 +350,26 @@ class DirectGoogleCalendarClient:
                     
             else:
                 logger.error(f"❌ Token refresh failed: {response.status_code}")
-                logger.error(f"   Response: {response.text}")
+                logger.error(f" Response: {response.text}")
+                
+                # Parse error details if available
+                try:
+                    error_data = response.json()
+                    error_type = error_data.get('error', 'unknown')
+                    error_desc = error_data.get('error_description', 'No description')
+                    logger.error(f"❌ Error type: {error_type}")
+                    logger.error(f"❌ Error description: {error_desc}")
+                    
+                    # Specific guidance for common errors
+                    if error_type == 'unauthorized_client':
+                        logger.error(f"🔧 SOLUTION: Your client_id or client_secret is wrong")
+                        logger.error(f"🔧 SOLUTION: Check that client_id ends with .apps.googleusercontent.com")
+                        logger.error(f"🔧 SOLUTION: Verify client_secret matches your OAuth app")
+                    elif error_type == 'invalid_grant':
+                        logger.error(f"🔧 SOLUTION: Your refresh_token is expired or invalid")
+                        logger.error(f"🔧 SOLUTION: Generate a new refresh_token via OAuth playground")
+                except:
+                    pass
                 
                 # Common error cases
                 if response.status_code == 400:
