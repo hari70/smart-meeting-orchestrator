@@ -870,6 +870,138 @@ async def test_token_refresh():
         logger.error(f"❌ Token refresh test error: {str(e)}")
         return {"error": str(e)}
 
+@app.post("/debug/simulate-sms")
+async def simulate_sms(request: Request, db: Session = Depends(get_db)):
+    """Simulate SMS processing to debug the full flow"""
+    try:
+        data = await request.json()
+        phone = data.get("phone", "+1234567890")
+        message = data.get("message", "Schedule family dinner tomorrow at 7pm")
+        first_name = data.get("first_name", "Debug")
+        last_name = data.get("last_name", "Test")
+        
+        logger.info(f"🧪 SIMULATING SMS: From {phone}, Message: '{message}'")
+        
+        # Normalize phone number
+        normalized_phone = normalize_phone_number(phone)
+        logger.info(f"📞 Normalized phone: {normalized_phone}")
+        
+        # Get team member
+        team_member = get_team_member_by_phone(normalized_phone, db)
+        if not team_member:
+            return {
+                "error": "No team member found for this phone",
+                "suggestion": "Add family member first with /admin/add-family-member"
+            }
+        
+        logger.info(f"👤 Found team member: {team_member.name}")
+        
+        # Get conversation
+        conversation = get_or_create_conversation(normalized_phone, db)
+        logger.info(f"💬 Conversation ID: {conversation.id}")
+        
+        # Process the command
+        logger.info(f"🤖 Processing command with command processor...")
+        response = await command_processor.process_command_with_llm(
+            message_text=message,
+            team_member=team_member,
+            conversation=conversation,
+            db=db
+        )
+        
+        logger.info(f"✅ Command processing complete. Response: {response}")
+        
+        return {
+            "success": True,
+            "phone": normalized_phone,
+            "team_member": team_member.name,
+            "message_sent": message,
+            "response_received": response,
+            "debug_info": {
+                "team_id": str(team_member.team_id),
+                "conversation_id": str(conversation.id),
+                "command_processor_type": type(command_processor).__name__,
+                "calendar_client_type": type(calendar_client).__name__
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ SMS simulation error: {str(e)}", exc_info=True)
+        return {"error": str(e)}
+
+@app.get("/debug/sms-flow-status")
+async def debug_sms_flow_status(db: Session = Depends(get_db)):
+    """Check the status of the SMS processing flow"""
+    try:
+        # Check family members
+        from database.models import Team, TeamMember
+        team = db.query(Team).filter(Team.name == "Family").first()
+        
+        if not team:
+            return {
+                "error": "No Family team found",
+                "suggestion": "Add family members first"
+            }
+        
+        members = db.query(TeamMember).filter(TeamMember.team_id == team.id).all()
+        
+        # Check member details
+        member_info = []
+        members_with_email = 0
+        for member in members:
+            has_email = bool(member.email)
+            if has_email:
+                members_with_email += 1
+            
+            member_info.append({
+                "name": member.name,
+                "phone": member.phone,
+                "has_email": has_email,
+                "email": member.email if has_email else "❌ Missing"
+            })
+        
+        # Check command processor configuration
+        processor_info = {
+            "type": type(command_processor).__name__,
+            "llm_enabled": getattr(command_processor, 'llm_enabled', False),
+            "calendar_client_type": type(calendar_client).__name__,
+            "calendar_enabled": getattr(calendar_client, 'enabled', False)
+        }
+        
+        # Check environment variables
+        env_status = {
+            "use_direct_google_calendar": os.getenv("USE_DIRECT_GOOGLE_CALENDAR"),
+            "use_real_mcp_calendar": os.getenv("USE_REAL_MCP_CALENDAR"),
+            "anthropic_api_key_present": bool(os.getenv("ANTHROPIC_API_KEY")),
+            "surge_credentials_present": bool(os.getenv("SURGE_SMS_API_KEY") and os.getenv("SURGE_ACCOUNT_ID"))
+        }
+        
+        return {
+            "team_info": {
+                "team_name": team.name,
+                "total_members": len(members),
+                "members_with_email": members_with_email,
+                "members": member_info
+            },
+            "processor_info": processor_info,
+            "environment_status": env_status,
+            "diagnosis": {
+                "can_create_calendar_events": processor_info["calendar_enabled"],
+                "can_send_invites": members_with_email > 0,
+                "llm_processing_available": processor_info["llm_enabled"],
+                "sms_integration_configured": env_status["surge_credentials_present"]
+            },
+            "recommendations": [
+                "Add email addresses to family members" if members_with_email == 0 else None,
+                "Set ANTHROPIC_API_KEY for smart LLM processing" if not env_status["anthropic_api_key_present"] else None,
+                "Check SMS webhook configuration" if not env_status["surge_credentials_present"] else None
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ SMS flow status error: {str(e)}")
+        return {"error": str(e)}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
