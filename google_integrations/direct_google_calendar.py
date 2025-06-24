@@ -62,6 +62,15 @@ class DirectGoogleCalendarClient:
             # Ensure we have a valid access token
             await self._ensure_valid_token()
             
+            # Double-check that client is still enabled after token validation
+            if not self.enabled:
+                logger.error("❌ Client disabled after token validation - falling back to mock")
+                return self._mock_event_response(title, start_time, duration_minutes, meet_link)
+            
+            if not self.access_token:
+                logger.error("❌ No access token available after validation - falling back to mock")
+                return self._mock_event_response(title, start_time, duration_minutes, meet_link)
+            
             end_time = start_time + timedelta(minutes=duration_minutes)
             
             # Prepare event data
@@ -92,6 +101,7 @@ class DirectGoogleCalendarClient:
                 }
             
             logger.info(f"🗓️ Creating REAL Google Calendar event: {title} at {start_time}")
+            logger.info(f"👥 Event attendees: {attendees or []}")
             
             # Call Google Calendar API
             headers = {
@@ -102,6 +112,9 @@ class DirectGoogleCalendarClient:
             url = f"{self.base_url}/calendars/{self.calendar_id}/events"
             params = {"conferenceDataVersion": 1} if not meet_link else {}
             
+            logger.info(f"🔗 API URL: {url}")
+            logger.info(f"🔑 Using token: {self.access_token[:15]}..." if self.access_token else "No token")
+            
             response = requests.post(
                 url,
                 headers=headers,
@@ -109,6 +122,8 @@ class DirectGoogleCalendarClient:
                 params=params,
                 timeout=10
             )
+            
+            logger.info(f"📊 API Response: {response.status_code}")
             
             if response.status_code in [200, 201]:
                 event_result = response.json()
@@ -136,7 +151,18 @@ class DirectGoogleCalendarClient:
                     "source": "real_google_api"
                 }
             else:
-                logger.error(f"❌ Google Calendar API error: {response.status_code} - {response.text}")
+                logger.error(f"❌ Google Calendar API error: {response.status_code}")
+                logger.error(f"❌ Response body: {response.text}")
+                
+                # Common error cases
+                if response.status_code == 401:
+                    logger.error("❌ Authentication failed - access token likely expired or invalid")
+                elif response.status_code == 403:
+                    logger.error("❌ Permission denied - check Google Calendar API permissions")
+                elif response.status_code == 400:
+                    logger.error("❌ Bad request - check event data format")
+                    logger.error(f"❌ Event data sent: {json.dumps(event_data, indent=2)}")
+                
                 return None
                 
         except Exception as e:
@@ -221,20 +247,55 @@ class DirectGoogleCalendarClient:
     async def _ensure_valid_token(self):
         """Ensure we have a valid access token"""
         
+        # If we have no access token but have refresh token, try to refresh
         if not self.access_token and self.refresh_token:
+            logger.info("🔄 No access token found, attempting refresh...")
             await self._refresh_access_token()
+            return
         
-        # TODO: Add token expiry check and refresh logic
-        # For now, assume token is valid
+        # If we have an access token, test if it's valid
+        if self.access_token:
+            logger.info("🧪 Testing current access token validity...")
+            test_url = f"{self.base_url}/calendars/primary"
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            
+            try:
+                test_response = requests.get(test_url, headers=headers, timeout=5)
+                
+                if test_response.status_code == 200:
+                    logger.info("✅ Access token is valid")
+                    return
+                elif test_response.status_code == 401:
+                    logger.warning("⚠️ Access token expired, attempting refresh...")
+                    if self.refresh_token:
+                        await self._refresh_access_token()
+                    else:
+                        logger.error("❌ No refresh token available for token refresh")
+                        self.enabled = False
+                else:
+                    logger.warning(f"⚠️ Token test returned {test_response.status_code}: {test_response.text}")
+                    
+            except Exception as e:
+                logger.error(f"❌ Error testing token validity: {e}")
+        
+        # Final check - if still no valid token, disable the client
+        if not self.access_token:
+            logger.error("❌ No valid access token available")
+            self.enabled = False
     
     async def _refresh_access_token(self):
         """Refresh access token using refresh token"""
         
         if not self.refresh_token or not self.client_id or not self.client_secret:
-            logger.error("❌ Missing refresh token or client credentials")
+            logger.error("❌ Missing refresh token or client credentials for refresh")
+            logger.error(f"   Refresh token: {'SET' if self.refresh_token else 'MISSING'}")
+            logger.error(f"   Client ID: {'SET' if self.client_id else 'MISSING'}")
+            logger.error(f"   Client Secret: {'SET' if self.client_secret else 'MISSING'}")
             return
         
         try:
+            logger.info("🔄 Attempting to refresh access token...")
+            
             data = {
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
@@ -248,15 +309,38 @@ class DirectGoogleCalendarClient:
                 timeout=10
             )
             
+            logger.info(f"🔄 Token refresh response: {response.status_code}")
+            
             if response.status_code == 200:
                 token_data = response.json()
                 self.access_token = token_data.get("access_token")
-                logger.info("✅ Access token refreshed")
-            else:
-                logger.error(f"❌ Token refresh failed: {response.text}")
+                logger.info("✅ Access token refreshed successfully")
                 
+                # Log token info (first few chars only for security)
+                if self.access_token:
+                    logger.info(f"🔑 New token starts with: {self.access_token[:10]}...")
+                    # Update enabled status
+                    self.enabled = True
+                else:
+                    logger.error("❌ Refresh response missing access_token field")
+                    logger.error(f"❌ Response data: {token_data}")
+                    
+            else:
+                logger.error(f"❌ Token refresh failed: {response.status_code}")
+                logger.error(f"   Response: {response.text}")
+                
+                # Common error cases
+                if response.status_code == 400:
+                    logger.error("❌ Likely causes: Invalid refresh token, client ID/secret mismatch, or token expired")
+                elif response.status_code == 401:
+                    logger.error("❌ Likely cause: Invalid client credentials")
+                    
+                # Disable client if refresh fails
+                self.enabled = False
+                    
         except Exception as e:
             logger.error(f"❌ Error refreshing token: {e}")
+            self.enabled = False
     
     def _mock_event_response(self, title: str, start_time: datetime, duration_minutes: int, meet_link: str) -> Dict:
         """Return mock response when API not configured"""

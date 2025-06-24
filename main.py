@@ -790,6 +790,86 @@ async def check_database_schema():
         logger.error(f"❌ Schema check error: {str(e)}")
         return {"error": str(e)}
 
+@app.get("/debug/google-credentials")
+async def debug_google_credentials():
+    """Debug Google Calendar credentials in detail"""
+    try:
+        # Import here to avoid circular imports
+        from google_integrations.direct_google_calendar import DirectGoogleCalendarClient
+        
+        # Create a client and check its state
+        client = DirectGoogleCalendarClient()
+        
+        # Check environment variables directly
+        import os
+        env_vars = {
+            "GOOGLE_CALENDAR_ACCESS_TOKEN": os.getenv("GOOGLE_CALENDAR_ACCESS_TOKEN"),
+            "GOOGLE_CALENDAR_REFRESH_TOKEN": os.getenv("GOOGLE_CALENDAR_REFRESH_TOKEN"),
+            "GOOGLE_CALENDAR_CLIENT_ID": os.getenv("GOOGLE_CALENDAR_CLIENT_ID"),
+            "GOOGLE_CALENDAR_CLIENT_SECRET": os.getenv("GOOGLE_CALENDAR_CLIENT_SECRET")
+        }
+        
+        # Safely check token formats without exposing full values
+        token_info = {}
+        for key, value in env_vars.items():
+            if value:
+                token_info[key] = {
+                    "present": True,
+                    "length": len(value),
+                    "starts_with": value[:10] if len(value) > 10 else value[:3] + "...",
+                    "format_check": {
+                        "access_token_format": value.startswith("ya29.") if "ACCESS_TOKEN" in key else None,
+                        "refresh_token_format": value.startswith("1//") if "REFRESH_TOKEN" in key else None,
+                        "client_id_format": value.endswith(".apps.googleusercontent.com") if "CLIENT_ID" in key else None
+                    }
+                }
+            else:
+                token_info[key] = {"present": False}
+        
+        return {
+            "client_enabled": client.enabled,
+            "client_access_token_present": bool(client.access_token),
+            "client_refresh_token_present": bool(client.refresh_token),
+            "client_client_id_present": bool(client.client_id),
+            "client_client_secret_present": bool(client.client_secret),
+            "environment_variables": token_info,
+            "diagnosis": {
+                "has_access_token": bool(client.access_token),
+                "has_refresh_credentials": bool(client.refresh_token and client.client_id and client.client_secret),
+                "should_be_enabled": bool(client.access_token or (client.refresh_token and client.client_id)),
+                "actual_enabled": client.enabled
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Credential debug error: {str(e)}")
+        return {"error": str(e)}
+
+@app.post("/debug/test-token-refresh")
+async def test_token_refresh():
+    """Test Google Calendar token refresh manually"""
+    try:
+        from google_integrations.direct_google_calendar import DirectGoogleCalendarClient
+        
+        client = DirectGoogleCalendarClient()
+        
+        if not client.enabled:
+            return {"error": "Client not enabled - missing credentials"}
+        
+        # Force a token validity check
+        await client._ensure_valid_token()
+        
+        return {
+            "success": True,
+            "client_enabled_after_refresh": client.enabled,
+            "has_access_token_after_refresh": bool(client.access_token),
+            "message": "Token refresh test completed - check logs for details"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Token refresh test error: {str(e)}")
+        return {"error": str(e)}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
