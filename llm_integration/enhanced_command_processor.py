@@ -289,7 +289,17 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
             
             # Use emails for attendees (skip the event creator to avoid duplicate)
             attendee_emails = [member.email for member in team_members if member.email and member.phone != team_member.phone]
-            logger.info(f"👥 Attendee emails: {attendee_emails}")
+            logger.info(f"👥 Attendee emails extracted: {attendee_emails}")
+            
+            # Debug: Show all team members and their email status
+            for member in team_members:
+                logger.info(f"👤 Team member: {member.name} ({member.phone}) - Email: {member.email or 'MISSING'}")
+            
+            if not attendee_emails:
+                logger.warning("⚠️ No attendee emails found! Event will be created without invites.")
+                logger.warning("💡 Make sure family members have email addresses in the database.")
+            else:
+                logger.info(f"✅ Will send invites to {len(attendee_emails)} attendees: {', '.join(attendee_emails)}")
             
             event = await self.calendar_client.create_event(
                 title=input_data["title"],

@@ -1058,6 +1058,106 @@ async def test_datetime_parsing(request: Request):
         logger.error(f"❌ Datetime parsing test error: {str(e)}")
         return {"error": str(e)}
 
+@app.post("/debug/test-calendar-invites")
+async def test_calendar_invites(request: Request, db: Session = Depends(get_db)):
+    """Test calendar invite functionality specifically"""
+    try:
+        data = await request.json()
+        phone = data.get("phone", "+1234567890")
+        test_emails = data.get("test_emails", [])  # Optional: override with test emails
+        
+        # Get team member
+        normalized_phone = normalize_phone_number(phone)
+        team_member = get_team_member_by_phone(normalized_phone, db)
+        
+        if not team_member:
+            return {
+                "error": "No team member found",
+                "suggestion": "Add this phone number as a family member first"
+            }
+        
+        # Get all family members
+        from database.models import Team, TeamMember
+        team = db.query(Team).filter(Team.id == team_member.team_id).first()
+        all_members = db.query(TeamMember).filter(TeamMember.team_id == team.id).all()
+        
+        # Check email status
+        members_info = []
+        attendee_emails = []
+        
+        for member in all_members:
+            has_email = bool(member.email)
+            members_info.append({
+                "name": member.name,
+                "phone": member.phone,
+                "email": member.email,
+                "has_email": has_email,
+                "is_creator": member.phone == team_member.phone
+            })
+            
+            # Add to attendees if has email and not the creator
+            if has_email and member.phone != team_member.phone:
+                attendee_emails.append(member.email)
+        
+        # Use test emails if provided
+        if test_emails:
+            attendee_emails = test_emails
+            logger.info(f"🧪 Using test emails instead: {attendee_emails}")
+        
+        # Create test calendar event with invites
+        if attendee_emails:
+            from google_integrations.direct_google_calendar import DirectGoogleCalendarClient
+            
+            calendar_client = DirectGoogleCalendarClient()
+            
+            if calendar_client.enabled:
+                test_time = datetime.now() + timedelta(hours=2)
+                
+                logger.info(f"🧪 TESTING CALENDAR INVITES:")
+                logger.info(f"   Event: Test Invite Debug")
+                logger.info(f"   Time: {test_time}")
+                logger.info(f"   Attendees: {attendee_emails}")
+                
+                event = await calendar_client.create_event(
+                    title="Test Calendar Invite Debug",
+                    start_time=test_time,
+                    duration_minutes=30,
+                    attendees=attendee_emails,
+                    meet_link=None
+                )
+                
+                return {
+                    "test_result": "success" if event else "failed",
+                    "event_created": bool(event),
+                    "event_data": event,
+                    "team_members": members_info,
+                    "attendee_emails_used": attendee_emails,
+                    "attendees_count": len(attendee_emails),
+                    "calendar_client_enabled": calendar_client.enabled,
+                    "recommendations": [
+                        "Check Railway logs for detailed invite processing" if event else "Check Google Calendar API credentials",
+                        "Verify family members have valid email addresses",
+                        "Check that attendee emails are being sent to Google API"
+                    ]
+                }
+            else:
+                return {
+                    "error": "Google Calendar client not enabled",
+                    "team_members": members_info,
+                    "attendee_emails_extracted": attendee_emails
+                }
+        else:
+            return {
+                "error": "No attendee emails found",
+                "team_members": members_info,
+                "issue": "Family members missing email addresses or only one person in team",
+                "suggestion": "Add family members with email addresses using /admin/add-family-member"
+            }
+        
+    except Exception as e:
+        logger.error(f"❌ Calendar invite test error: {str(e)}", exc_info=True)
+        return {"error": str(e)}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))

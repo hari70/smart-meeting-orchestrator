@@ -100,8 +100,15 @@ class DirectGoogleCalendarClient:
                     }
                 }
             
-            logger.info(f"🗓️ Creating REAL Google Calendar event: {title} at {start_time}")
-            logger.info(f"👥 Event attendees: {attendees or []}")
+            logger.info(f"📅 Creating REAL Google Calendar event: {title} at {start_time}")
+            logger.info(f"👥 Event attendees to be invited: {attendees or []}")
+            
+            # Log the exact event data being sent to Google API
+            logger.info(f"📦 Event data being sent to Google Calendar API:")
+            logger.info(f"   Title: {event_data.get('summary')}")
+            logger.info(f"   Start: {event_data.get('start')}")
+            logger.info(f"   End: {event_data.get('end')}")
+            logger.info(f"   Attendees: {event_data.get('attendees', [])}")
             
             # Call Google Calendar API
             headers = {
@@ -128,6 +135,14 @@ class DirectGoogleCalendarClient:
             if response.status_code in [200, 201]:
                 event_result = response.json()
                 logger.info(f"✅ REAL Google Calendar event created: {event_result.get('id')}")
+                
+                # Log the attendees that were actually added
+                actual_attendees = event_result.get('attendees', [])
+                logger.info(f"👥 Attendees in created event: {len(actual_attendees)}")
+                for attendee in actual_attendees:
+                    email = attendee.get('email')
+                    status = attendee.get('responseStatus', 'unknown')
+                    logger.info(f"   - {email}: {status}")
                 
                 # Extract Google Meet link
                 hangout_link = event_result.get("hangoutLink")
