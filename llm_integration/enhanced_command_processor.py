@@ -465,18 +465,10 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
                 logger.info(f"✅ Parsed ISO format: {result}")
                 return result
             
-            # Use consistent timezone (America/New_York) instead of server time
-            try:
-                import pytz
-                eastern = pytz.timezone('America/New_York')
-                now = datetime.now(eastern)
-                logger.info(f"🌍 Using timezone: America/New_York")
-                logger.info(f"🕰️ Current time in timezone: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}")
-            except ImportError:
-                # Fallback to server time if pytz not available
-                now = datetime.now()
-                eastern = None
-                logger.warning("⚠️ pytz not available, using server timezone")
+            # Use simple server time
+            now = datetime.now()
+            logger.info(f"🕰️ Current server time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}")
+            eastern = None
             
             time_lower = time_str.lower().strip()
             
@@ -575,36 +567,17 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
                 else:
                     logger.warning(f"⚠️ No time found in '{time_str}', defaulting to 7:00 PM")
             
-            # Combine date and time
-            if eastern:
-                # Create as naive datetime first, then localize to Eastern
-                naive_dt = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
-                result = eastern.localize(naive_dt)
-                logger.info(f"✅ Final parsed datetime: {result.strftime('%A, %B %d, %Y at %I:%M %p %Z')}")
-                # Return as naive datetime for compatibility with existing code
-                return result.replace(tzinfo=None)
-            else:
-                # Fallback without timezone
-                result = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
-                logger.info(f"✅ Final parsed datetime: {result.strftime('%A, %B %d, %Y at %I:%M %p')}")
-                return result
+            # Combine date and time (simple approach)
+            result = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
+            logger.info(f"✅ Final parsed datetime: {result.strftime('%A, %B %d, %Y at %I:%M %p')}")
+            return result
             
         except Exception as e:
             logger.error(f"❌ Failed to parse datetime: {time_str}, error: {e}")
-            # Return tomorrow at 7 PM as fallback
-            try:
-                import pytz
-                eastern = pytz.timezone('America/New_York')
-                now = datetime.now(eastern)
-                fallback_naive = datetime.combine((now + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
-                fallback = eastern.localize(fallback_naive).replace(tzinfo=None)
-                logger.warning(f"⚠️ Using fallback datetime: {fallback}")
-                return fallback
-            except:
-                # Ultimate fallback
-                fallback = datetime.combine((datetime.now() + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
-                logger.warning(f"⚠️ Using ultimate fallback datetime: {fallback}")
-                return fallback
+            # Return tomorrow at 7 PM as fallback (simple approach)
+            fallback = datetime.combine((datetime.now() + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
+            logger.warning(f"⚠️ Using fallback datetime: {fallback}")
+            return fallback
     
     async def _get_team_context(self, team_member, db) -> Dict:
         """Get team context for LLM"""
