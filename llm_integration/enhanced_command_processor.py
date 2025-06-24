@@ -446,34 +446,126 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
     def _parse_datetime(self, time_str: str) -> Optional[datetime]:
         """Parse various datetime formats"""
         
+        logger.info(f"🕰️ Parsing datetime string: '{time_str}'")
+        
         try:
             # Try ISO format first
             if 'T' in time_str or '+' in time_str:
-                return datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+                result = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+                logger.info(f"✅ Parsed ISO format: {result}")
+                return result
             
-            # Try simple parsing for relative times
+            # Parse natural language date/time
             now = datetime.now()
-            time_lower = time_str.lower()
+            time_lower = time_str.lower().strip()
             
+            logger.info(f"🔍 Processing natural language: '{time_lower}'")
+            
+            # Extract date part
+            base_date = None
             if "tomorrow" in time_lower:
                 base_date = (now + timedelta(days=1)).date()
+                logger.info(f"📅 Date: tomorrow = {base_date}")
             elif "today" in time_lower:
                 base_date = now.date()
-            elif "weekend" in time_lower:
+                logger.info(f"📅 Date: today = {base_date}")
+            elif "weekend" in time_lower or "saturday" in time_lower:
                 # Next Saturday
                 days_until_saturday = (5 - now.weekday()) % 7
                 if days_until_saturday == 0:
                     days_until_saturday = 7
                 base_date = (now + timedelta(days=days_until_saturday)).date()
+                logger.info(f"📅 Date: next saturday = {base_date}")
+            elif "sunday" in time_lower:
+                days_until_sunday = (6 - now.weekday()) % 7
+                if days_until_sunday == 0:
+                    days_until_sunday = 7
+                base_date = (now + timedelta(days=days_until_sunday)).date()
+                logger.info(f"📅 Date: next sunday = {base_date}")
             else:
-                base_date = (now + timedelta(days=1)).date()  # Default tomorrow
+                # Try to find day names (monday, tuesday, etc.)
+                days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+                for i, day in enumerate(days):
+                    if day in time_lower:
+                        days_ahead = (i - now.weekday()) % 7
+                        if days_ahead == 0:
+                            days_ahead = 7  # Next week if it's the same day
+                        base_date = (now + timedelta(days=days_ahead)).date()
+                        logger.info(f"📅 Date: next {day} = {base_date}")
+                        break
+                
+                if not base_date:
+                    # Default to tomorrow if no date found
+                    base_date = (now + timedelta(days=1)).date()
+                    logger.warning(f"⚠️ No date found, defaulting to tomorrow: {base_date}")
             
-            # Default to 7 PM
-            return datetime.combine(base_date, datetime.min.time().replace(hour=19))
+            # Extract time part
+            hour = 19  # Default to 7 PM
+            minute = 0
+            
+            # Look for time patterns
+            import re
+            
+            # Pattern 1: "2pm", "2 pm", "14:00", "2:30pm", "2:30 pm"
+            time_patterns = [
+                r'(\d{1,2})\s*:?\s*(\d{2})?\s*(pm|am)',  # 2pm, 2:30pm, 2 pm, 2:30 pm
+                r'(\d{1,2})\s*:?\s*(\d{2})',            # 14:00, 2:30
+                r'(\d{1,2})\s*(pm|am)',                  # 2pm, 2am
+            ]
+            
+            time_found = False
+            for pattern in time_patterns:
+                match = re.search(pattern, time_lower)
+                if match:
+                    hour_str = match.group(1)
+                    minute_str = match.group(2) if len(match.groups()) > 1 and match.group(2) else "0"
+                    am_pm = match.group(3) if len(match.groups()) > 2 else None
+                    
+                    hour = int(hour_str)
+                    minute = int(minute_str) if minute_str and minute_str.isdigit() else 0
+                    
+                    # Handle AM/PM
+                    if am_pm:
+                        if am_pm == 'pm' and hour != 12:
+                            hour += 12
+                        elif am_pm == 'am' and hour == 12:
+                            hour = 0
+                    elif hour < 8:  # If no AM/PM specified and hour < 8, assume PM
+                        hour += 12
+                    
+                    time_found = True
+                    logger.info(f"🕰️ Time extracted: {hour:02d}:{minute:02d} from '{match.group(0)}'")
+                    break
+            
+            if not time_found:
+                # Look for common time words
+                if "morning" in time_lower:
+                    hour = 9
+                    logger.info("🌅 Time: morning = 9:00 AM")
+                elif "afternoon" in time_lower:
+                    hour = 14
+                    logger.info("☀️ Time: afternoon = 2:00 PM")
+                elif "evening" in time_lower:
+                    hour = 18
+                    logger.info("🌆 Time: evening = 6:00 PM")
+                elif "night" in time_lower:
+                    hour = 20
+                    logger.info("🌃 Time: night = 8:00 PM")
+                else:
+                    logger.warning(f"⚠️ No time found in '{time_str}', defaulting to 7:00 PM")
+            
+            # Combine date and time
+            result = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
+            logger.info(f"✅ Final parsed datetime: {result.strftime('%A, %B %d, %Y at %I:%M %p')}")
+            
+            return result
             
         except Exception as e:
-            logger.error(f"Failed to parse datetime: {time_str}, error: {e}")
-            return None
+            logger.error(f"❌ Failed to parse datetime: {time_str}, error: {e}")
+            # Return tomorrow at 7 PM as fallback
+            fallback = datetime.combine((datetime.now() + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
+            logger.warning(f"⚠️ Using fallback datetime: {fallback}")
+            return fallback
     
     async def _get_team_context(self, team_member, db) -> Dict:
         """Get team context for LLM"""

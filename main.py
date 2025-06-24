@@ -1002,6 +1002,62 @@ async def debug_sms_flow_status(db: Session = Depends(get_db)):
         logger.error(f"❌ SMS flow status error: {str(e)}")
         return {"error": str(e)}
 
+@app.post("/debug/test-datetime-parsing")
+async def test_datetime_parsing(request: Request):
+    """Test datetime parsing with various inputs"""
+    try:
+        data = await request.json()
+        test_strings = data.get("test_strings", [
+            "tomorrow at 2pm",
+            "today at 3:30pm", 
+            "friday morning",
+            "this weekend",
+            "monday 9am",
+            "next tuesday 2:30pm",
+            "tomorrow 14:00",
+            "saturday evening"
+        ])
+        
+        # Import the command processor to access the parsing method
+        from llm_integration.enhanced_command_processor import LLMCommandProcessor
+        
+        # Create a temporary instance to test parsing
+        temp_processor = LLMCommandProcessor(None, None, None, None)
+        
+        results = []
+        for test_str in test_strings:
+            try:
+                parsed_dt = temp_processor._parse_datetime(test_str)
+                if parsed_dt:
+                    results.append({
+                        "input": test_str,
+                        "parsed": parsed_dt.isoformat(),
+                        "formatted": parsed_dt.strftime("%A, %B %d, %Y at %I:%M %p"),
+                        "success": True
+                    })
+                else:
+                    results.append({
+                        "input": test_str,
+                        "error": "Failed to parse",
+                        "success": False
+                    })
+            except Exception as e:
+                results.append({
+                    "input": test_str,
+                    "error": str(e),
+                    "success": False
+                })
+        
+        return {
+            "datetime_parsing_test": results,
+            "current_time": datetime.now().strftime("%A, %B %d, %Y at %I:%M %p"),
+            "timezone": "America/New_York (assumed)"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Datetime parsing test error: {str(e)}")
+        return {"error": str(e)}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
