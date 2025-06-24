@@ -281,46 +281,128 @@ ACTION REQUIRED NOW."""
         return "Family Get-Together"
     
     def _extract_meeting_time(self, message: str) -> datetime:
-        """Extract meeting time from message"""
-        now = datetime.now()
-        message_lower = message.lower()
+        """Extract meeting time from message with proper parsing"""
         
-        # Default time based on keywords
-        if "morning" in message_lower:
-            hour = 10
-        elif "afternoon" in message_lower:
-            hour = 15
-        elif "evening" in message_lower:
-            hour = 19
-        elif "dinner" in message_lower:
-            hour = 18
-        elif "lunch" in message_lower:
-            hour = 12
-        else:
-            hour = 19  # Default 7 PM
+        logger.info(f"🕰️ [MCP] Parsing datetime string: '{message}'")
         
-        # Default day logic
-        if "today" in message_lower:
-            target_date = now.date()
-        elif "tomorrow" in message_lower:
-            target_date = (now + timedelta(days=1)).date()
-        elif "weekend" in message_lower or "saturday" in message_lower:
-            # Next Saturday
-            days_until_saturday = (5 - now.weekday()) % 7
-            if days_until_saturday == 0:
-                days_until_saturday = 7
-            target_date = (now + timedelta(days=days_until_saturday)).date()
-        elif "sunday" in message_lower:
-            # Next Sunday
-            days_until_sunday = (6 - now.weekday()) % 7
-            if days_until_sunday == 0:
-                days_until_sunday = 7
-            target_date = (now + timedelta(days=days_until_sunday)).date()
-        else:
-            # Default to tomorrow evening
-            target_date = (now + timedelta(days=1)).date()
-        
-        return datetime.combine(target_date, datetime.min.time().replace(hour=hour))
+        try:
+            # Parse natural language date/time
+            now = datetime.now()
+            time_lower = message.lower().strip()
+            
+            logger.info(f"🔍 [MCP] Processing natural language: '{time_lower}'")
+            
+            # Extract date part
+            base_date = None
+            if "tomorrow" in time_lower:
+                base_date = (now + timedelta(days=1)).date()
+                logger.info(f"📅 [MCP] Date: tomorrow = {base_date}")
+            elif "today" in time_lower:
+                base_date = now.date()
+                logger.info(f"📅 [MCP] Date: today = {base_date}")
+            elif "weekend" in time_lower or "saturday" in time_lower:
+                # Next Saturday
+                days_until_saturday = (5 - now.weekday()) % 7
+                if days_until_saturday == 0:
+                    days_until_saturday = 7
+                base_date = (now + timedelta(days=days_until_saturday)).date()
+                logger.info(f"📅 [MCP] Date: next saturday = {base_date}")
+            elif "sunday" in time_lower:
+                days_until_sunday = (6 - now.weekday()) % 7
+                if days_until_sunday == 0:
+                    days_until_sunday = 7
+                base_date = (now + timedelta(days=days_until_sunday)).date()
+                logger.info(f"📅 [MCP] Date: next sunday = {base_date}")
+            else:
+                # Try to find day names (monday, tuesday, etc.)
+                days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+                for i, day in enumerate(days):
+                    if day in time_lower:
+                        days_ahead = (i - now.weekday()) % 7
+                        if days_ahead == 0:
+                            days_ahead = 7  # Next week if it's the same day
+                        base_date = (now + timedelta(days=days_ahead)).date()
+                        logger.info(f"📅 [MCP] Date: next {day} = {base_date}")
+                        break
+                
+                if not base_date:
+                    # Default to tomorrow if no date found
+                    base_date = (now + timedelta(days=1)).date()
+                    logger.warning(f"⚠️ [MCP] No date found, defaulting to tomorrow: {base_date}")
+            
+            # Extract time part
+            hour = 19  # Default to 7 PM
+            minute = 0
+            
+            # Look for time patterns
+            import re
+            
+            # Pattern 1: "2pm", "2 pm", "14:00", "2:30pm", "2:30 pm"
+            time_patterns = [
+                r'(\d{1,2})\s*:?\s*(\d{2})?\s*(pm|am)',  # 2pm, 2:30pm, 2 pm, 2:30 pm
+                r'(\d{1,2})\s*:?\s*(\d{2})',            # 14:00, 2:30
+                r'(\d{1,2})\s*(pm|am)',                  # 2pm, 2am
+            ]
+            
+            time_found = False
+            for pattern in time_patterns:
+                match = re.search(pattern, time_lower)
+                if match:
+                    hour_str = match.group(1)
+                    minute_str = match.group(2) if len(match.groups()) > 1 and match.group(2) else "0"
+                    am_pm = match.group(3) if len(match.groups()) > 2 else None
+                    
+                    hour = int(hour_str)
+                    minute = int(minute_str) if minute_str and minute_str.isdigit() else 0
+                    
+                    # Handle AM/PM
+                    if am_pm:
+                        if am_pm == 'pm' and hour != 12:
+                            hour += 12
+                        elif am_pm == 'am' and hour == 12:
+                            hour = 0
+                    elif hour < 8:  # If no AM/PM specified and hour < 8, assume PM
+                        hour += 12
+                    
+                    time_found = True
+                    logger.info(f"🕰️ [MCP] Time extracted: {hour:02d}:{minute:02d} from '{match.group(0)}'")
+                    break
+            
+            if not time_found:
+                # Look for common time words
+                if "morning" in time_lower:
+                    hour = 9
+                    logger.info("🌅 [MCP] Time: morning = 9:00 AM")
+                elif "afternoon" in time_lower:
+                    hour = 14
+                    logger.info("☀️ [MCP] Time: afternoon = 2:00 PM")
+                elif "evening" in time_lower:
+                    hour = 18
+                    logger.info("🌆 [MCP] Time: evening = 6:00 PM")
+                elif "night" in time_lower:
+                    hour = 20
+                    logger.info("🌃 [MCP] Time: night = 8:00 PM")
+                elif "dinner" in time_lower:
+                    hour = 18
+                    logger.info("🍽️ [MCP] Time: dinner = 6:00 PM")
+                elif "lunch" in time_lower:
+                    hour = 12
+                    logger.info("🍽️ [MCP] Time: lunch = 12:00 PM")
+                else:
+                    logger.warning(f"⚠️ [MCP] No time found in '{message}', defaulting to 7:00 PM")
+            
+            # Combine date and time
+            result = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
+            logger.info(f"✅ [MCP] Final parsed datetime: {result.strftime('%A, %B %d, %Y at %I:%M %p')}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ [MCP] Failed to parse datetime: {message}, error: {e}")
+            # Return tomorrow at 7 PM as fallback
+            fallback = datetime.combine((datetime.now() + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
+            logger.warning(f"⚠️ [MCP] Using fallback datetime: {fallback}")
+            return fallback
     
     async def _execute_action_tool(self, tool_name: str, tool_input: Dict, team_member, db) -> Dict:
         """Execute tools with real MCP calendar integration"""
@@ -354,19 +436,52 @@ ACTION REQUIRED NOW."""
             else:
                 start_time = self._extract_meeting_time("tomorrow evening")
             
+            logger.info(f"🗓️ [MCP] CALENDAR EVENT CREATION ATTEMPT:")
+            logger.info(f"   Title: {input_data['title']}")
+            logger.info(f"   Start time: {start_time}")
+            logger.info(f"   Duration: {input_data.get('duration_minutes', 60)} minutes")
+            
+            # Get team members for attendees
+            from database.models import Team, TeamMember
+            team = db.query(Team).filter(Team.id == team_member.team_id).first()
+            team_members = db.query(TeamMember).filter(TeamMember.team_id == team.id).all()
+            
+            logger.info(f"👥 [MCP] Team members found: {len(team_members)}")
+            for member in team_members:
+                logger.info(f"   - {member.name} ({member.phone}) - Email: {member.email or 'MISSING'}")
+            
+            # Extract attendee emails (skip the event creator to avoid duplicate)
+            attendee_emails = [member.email for member in team_members if member.email and member.phone != team_member.phone]
+            logger.info(f"👥 [MCP] Attendee emails extracted: {attendee_emails}")
+            
+            if not attendee_emails:
+                logger.warning("⚠️ [MCP] No attendee emails found! Event will be created without invites.")
+                logger.warning("💡 [MCP] Make sure family members have email addresses in the database.")
+            else:
+                logger.info(f"✅ [MCP] Will send invites to {len(attendee_emails)} attendees: {', '.join(attendee_emails)}")
+            
             # Create Google Meet link
+            logger.info(f"🔗 [MCP] Creating Google Meet link...")
             meet_link = await self.meet_client.create_meeting(input_data["title"])
+            logger.info(f"✅ [MCP] Meet link created: {meet_link}")
             
             # Use the calendar client (which should be RealMCPCalendarClient if enabled)
+            logger.info(f"📅 [MCP] Creating calendar event via calendar client...")
             event = await self.calendar_client.create_event(
                 title=input_data["title"],
                 start_time=start_time,
                 duration_minutes=input_data.get("duration_minutes", 60),
-                attendees=[],  # You can add team member emails here
+                attendees=attendee_emails,  # Now using real attendee emails!
                 meet_link=meet_link
             )
             
+            logger.info(f"📊 [MCP] Calendar client response: {event}")
+            
             if event:
+                logger.info(f"✅ [MCP] Calendar event created successfully")
+                logger.info(f"   Event ID: {event.get('id')}")
+                logger.info(f"   Source: {event.get('source', 'unknown')}")
+                
                 # Save to database
                 from database.models import Meeting
                 meeting = Meeting(
@@ -381,19 +496,24 @@ ACTION REQUIRED NOW."""
                 db.add(meeting)
                 db.commit()
                 
+                logger.info(f"💾 [MCP] Meeting saved to database with ID: {meeting.id}")
+                
                 return {
                     "success": True,
                     "title": input_data["title"],
                     "start_time": start_time.strftime("%A, %B %d at %I:%M %p"),
                     "meet_link": meet_link,
                     "event_id": event.get("id"),
-                    "calendar_source": event.get("source", "unknown")
+                    "calendar_source": event.get("source", "unknown"),
+                    "attendees_count": len(attendee_emails),
+                    "real_calendar_event": event.get("source") != "mock"
                 }
-            
-            return {"success": False, "error": "Calendar event creation failed"}
+            else:
+                logger.error(f"❌ [MCP] Calendar client returned None/False")
+                return {"success": False, "error": "Calendar client failed to create event"}
             
         except Exception as e:
-            logger.error(f"❌ Real calendar event creation failed: {e}")
+            logger.error(f"❌ [MCP] Real calendar event creation failed: {e}", exc_info=True)
             return {"error": str(e)}
     
     async def _list_real_events(self, input_data: Dict, team_member, db) -> Dict:
