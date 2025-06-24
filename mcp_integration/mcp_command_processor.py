@@ -295,8 +295,12 @@ ACTION REQUIRED NOW."""
             # Extract date part
             base_date = None
             if "tomorrow" in time_lower:
-                base_date = (now + timedelta(days=1)).date()
-                logger.info(f"📅 [MCP] Date: tomorrow = {base_date}")
+                tomorrow = now + timedelta(days=1)
+                base_date = tomorrow.date()
+                logger.info(f"📅 [MCP] TOMORROW CALCULATION:")
+                logger.info(f"   Today is {now.strftime('%A %B %d, %Y')}")
+                logger.info(f"   Tomorrow will be {tomorrow.strftime('%A %B %d, %Y')}")
+                logger.info(f"   Using date: {base_date}")
             elif "today" in time_lower:
                 base_date = now.date()
                 logger.info(f"📅 [MCP] Date: today = {base_date}")

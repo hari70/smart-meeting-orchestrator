@@ -36,27 +36,21 @@ surge_client = SurgeSMSClient(
     account_id=os.getenv("SURGE_ACCOUNT_ID")
 )
 
-# Initialize calendar client - priority order: Direct Google API > Real MCP > Mock
+# Initialize calendar client - Real MCP integration only (mock mode removed)
 if os.getenv("USE_DIRECT_GOOGLE_CALENDAR") == "true":
     calendar_client = DirectGoogleCalendarClient()
     logger.info("🔗 Using DIRECT Google Calendar API integration")
-elif os.getenv("USE_REAL_MCP_CALENDAR") == "true":
-    calendar_client = RealMCPCalendarClient()
-    logger.info("🔗 Using REAL MCP Google Calendar tools")
 else:
-    calendar_client = GoogleCalendarClient()
-    logger.info("📋 Using mock Google Calendar client")
+    # Always use real MCP calendar integration - no mock mode
+    calendar_client = RealMCPCalendarClient()
+    logger.info("🔗 Using REAL MCP Google Calendar tools (mock mode removed)")
 
 meet_client = GoogleMeetClient()
 strava_client = None  # Will add Strava integration later
 
-# Use aggressive MCP command processor when real MCP calendar is enabled
-if os.getenv("USE_REAL_MCP_CALENDAR") == "true":
-    command_processor = MCPCommandProcessor(surge_client, calendar_client, meet_client, strava_client)
-    logger.info("🎯 Using AGGRESSIVE MCP Command Processor (forces tool usage)")
-else:
-    command_processor = LLMCommandProcessor(surge_client, calendar_client, meet_client, strava_client)
-    logger.info("🤖 Using standard LLM Command Processor")
+# Always use aggressive MCP command processor since mock mode is removed
+command_processor = MCPCommandProcessor(surge_client, calendar_client, meet_client, strava_client)
+logger.info("🎯 Using AGGRESSIVE MCP Command Processor (forces tool usage - mock mode removed)")
 
 @app.on_event("startup")
 async def startup_event():

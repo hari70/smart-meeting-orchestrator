@@ -468,6 +468,7 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
             # Use simple server time
             now = datetime.now()
             logger.info(f"🕰️ Current server time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}")
+            logger.info(f"📅 Today is: {now.strftime('%A')} (weekday #{now.weekday()})")
             eastern = None
             
             time_lower = time_str.lower().strip()
@@ -477,8 +478,12 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
             # Extract date part
             base_date = None
             if "tomorrow" in time_lower:
-                base_date = (now + timedelta(days=1)).date()
-                logger.info(f"📅 Date: tomorrow = {base_date} ({(now + timedelta(days=1)).strftime('%A')})")
+                tomorrow = now + timedelta(days=1)
+                base_date = tomorrow.date()
+                logger.info(f"📅 TOMORROW CALCULATION:")
+                logger.info(f"   Today is {now.strftime('%A %B %d, %Y')}")
+                logger.info(f"   Tomorrow will be {tomorrow.strftime('%A %B %d, %Y')}")
+                logger.info(f"   Using date: {base_date}")
             elif "today" in time_lower:
                 base_date = now.date()
                 logger.info(f"📅 Date: today = {base_date} ({now.strftime('%A')})")

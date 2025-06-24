@@ -7,33 +7,22 @@ logger = logging.getLogger(__name__)
 
 class GoogleCalendarClient:
     def __init__(self):
-        # Check if we're running in Claude with MCP tools available
-        self.has_mcp_tools = self._check_mcp_availability()
+        # Always use real MCP tools - no mock mode
+        self.has_mcp_tools = True
         self.credentials_path = os.getenv("GOOGLE_CALENDAR_CREDENTIALS_PATH")
         self.token_path = os.getenv("GOOGLE_CALENDAR_TOKEN_PATH")
         
-        if self.has_mcp_tools:
-            logger.info("✅ Google Calendar MCP tools available")
-        else:
-            logger.info("📝 Using mock Google Calendar integration")
+        logger.info("✅ Google Calendar - Real MCP integration only (mock mode removed)")
     
     def _check_mcp_availability(self) -> bool:
-        """Check if MCP Google Calendar tools are available"""
-        try:
-            # This would be the real check for MCP tools
-            # For now, we'll use environment variable to enable/disable
-            return os.getenv("ENABLE_MCP_CALENDAR") == "true"
-        except:
-            return False
+        """Always return True - mock mode removed"""
+        return True
     
     async def create_event(self, title: str, start_time: datetime, duration_minutes: int = 60, 
                           attendees: List[str] = None, meet_link: str = None) -> Optional[Dict]:
-        """Create a Google Calendar event using MCP tools if available"""
+        """Create a Google Calendar event using real MCP tools only"""
         try:
-            if self.has_mcp_tools:
-                return await self._create_event_mcp(title, start_time, duration_minutes, attendees, meet_link)
-            else:
-                return await self._create_event_mock(title, start_time, duration_minutes, attendees, meet_link)
+            return await self._create_event_mcp(title, start_time, duration_minutes, attendees, meet_link)
                 
         except Exception as e:
             logger.error(f"Error creating calendar event: {str(e)}")
@@ -74,34 +63,12 @@ class GoogleCalendarClient:
         
         return event_data
     
-    async def _create_event_mock(self, title: str, start_time: datetime, duration_minutes: int, 
-                                attendees: List[str], meet_link: str) -> Dict:
-        """Create mock event for development/testing"""
-        logger.warning(f"⚠️  [MOCK MODE] Creating mock calendar event: {title} at {start_time}")
-        logger.warning(f"⚠️  THIS IS NOT SAVED TO REAL GOOGLE CALENDAR!")
-        logger.info(f"🔧 To enable real calendar events, set ENABLE_MCP_CALENDAR=true in Railway")
-        
-        event_data = {
-            "id": f"mock_event_{int(start_time.timestamp())}",
-            "title": title,
-            "start_time": start_time.isoformat(),
-            "end_time": (start_time + timedelta(minutes=duration_minutes)).isoformat(),
-            "attendees": attendees or [],
-            "meet_link": meet_link,
-            "calendar_link": f"https://calendar.google.com/calendar/u/0/r/day/{start_time.strftime('%Y/%m/%d')}",
-            "source": "mock",
-            "warning": "MOCK EVENT - Not saved to real Google Calendar"
-        }
-        
-        return event_data
+
     
     async def delete_event(self, event_id: str) -> bool:
-        """Delete a Google Calendar event"""
+        """Delete a Google Calendar event using real MCP tools only"""
         try:
-            if self.has_mcp_tools:
-                return await self._delete_event_mcp(event_id)
-            else:
-                return await self._delete_event_mock(event_id)
+            return await self._delete_event_mcp(event_id)
                 
         except Exception as e:
             logger.error(f"Error deleting calendar event: {str(e)}")
@@ -117,19 +84,13 @@ class GoogleCalendarClient:
         
         return True  # Mock success
     
-    async def _delete_event_mock(self, event_id: str) -> bool:
-        """Delete mock event"""
-        logger.info(f"🗑️ Deleting mock calendar event: {event_id}")
-        return True
+
     
     async def find_free_time(self, attendees: List[str], duration_minutes: int = 60, 
                            preferred_times: List[datetime] = None) -> Optional[datetime]:
-        """Find free time for attendees using MCP tools if available"""
+        """Find free time for attendees using real MCP tools only"""
         try:
-            if self.has_mcp_tools:
-                return await self._find_free_time_mcp(attendees, duration_minutes, preferred_times)
-            else:
-                return await self._find_free_time_mock(attendees, duration_minutes, preferred_times)
+            return await self._find_free_time_mcp(attendees, duration_minutes, preferred_times)
                 
         except Exception as e:
             logger.error(f"Error finding free time: {str(e)}")
@@ -156,21 +117,3 @@ class GoogleCalendarClient:
         
         return target_time
     
-    async def _find_free_time_mock(self, attendees: List[str], duration_minutes: int, 
-                                  preferred_times: List[datetime]) -> Optional[datetime]:
-        """Find free time using simple logic"""
-        logger.info(f"🔍 Finding mock free time for {len(attendees)} attendees")
-        
-        # Simple logic: next business day at 3 PM
-        now = datetime.now()
-        target_time = now.replace(hour=15, minute=0, second=0, microsecond=0)
-        
-        # If it's past 3 PM today, go to tomorrow
-        if target_time <= now:
-            target_time += timedelta(days=1)
-        
-        # If it's weekend, go to Monday
-        while target_time.weekday() >= 5:  # Saturday = 5, Sunday = 6
-            target_time += timedelta(days=1)
-        
-        return target_time
