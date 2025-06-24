@@ -36,17 +36,17 @@ surge_client = SurgeSMSClient(
     account_id=os.getenv("SURGE_ACCOUNT_ID")
 )
 
-# Initialize calendar client - Always use MCP tools (no direct API)
-# Since you have 8 Google Calendar MCP tools, let's use those instead of direct API
-calendar_client = RealMCPCalendarClient()
-logger.info("🔗 Using YOUR 8 MCP Google Calendar tools (direct API disabled)")
+# Initialize calendar client - ALWAYS use Direct Google API (MCP removed)
+# Since MCP tools aren't working reliably, use direct Google Calendar API with Railway credentials
+calendar_client = DirectGoogleCalendarClient()
+logger.info("🔗 Using DIRECT Google Calendar API only (MCP disabled)")
 
 meet_client = GoogleMeetClient()
 strava_client = None  # Will add Strava integration later
 
-# Always use aggressive MCP command processor since mock mode is removed
-command_processor = MCPCommandProcessor(surge_client, calendar_client, meet_client, strava_client)
-logger.info("🎯 Using AGGRESSIVE MCP Command Processor (forces tool usage - mock mode removed)")
+# Use standard LLM command processor since we're using Direct Google API
+command_processor = LLMCommandProcessor(surge_client, calendar_client, meet_client, strava_client)
+logger.info("🤖 Using standard LLM Command Processor with Direct Google Calendar API")
 
 @app.on_event("startup")
 async def startup_event():

@@ -123,7 +123,7 @@ class LLMCommandProcessor:
             logger.info(f"🤖 Claude response: {len(response.content)} content blocks")
             
             # Process Claude's response and tool calls
-            return await self._process_llm_response(response, team_member, db)
+            return await self._process_llm_response(response, team_member, db, message_text)
             
         except Exception as e:
             logger.error(f"❌ LLM processing error: {e}")
@@ -131,13 +131,25 @@ class LLMCommandProcessor:
     
     def _create_system_prompt(self, team_member, team_context: Dict) -> str:
         """Create system prompt for Claude with MCP context"""
+        current_time = datetime.now()
+        tomorrow = current_time + timedelta(days=1)
+        
         return f"""You are a smart family meeting coordinator with access to Google Calendar and Strava fitness data.
+
+IMPORTANT DATE CONTEXT:
+- TODAY is: {current_time.strftime('%A, %B %d, %Y')}
+- TOMORROW is: {tomorrow.strftime('%A, %B %d, %Y')}
+- Current time: {current_time.strftime('%A, %B %d, %Y at %I:%M %p')}
 
 CONTEXT:
 - User: {team_member.name} (Phone: {team_member.phone})
 - Team: {team_context['team_name']} ({len(team_context['members'])} members)
 - Members: {', '.join([m['name'] for m in team_context['members']])}
-- Current time: {datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}
+
+DATE CALCULATION RULES:
+- If user says "tomorrow", use {tomorrow.strftime('%Y-%m-%d')} (which is {tomorrow.strftime('%A')})
+- If user says "today", use {current_time.strftime('%Y-%m-%d')} (which is {current_time.strftime('%A')})
+- Be VERY careful with date calculations - always double-check!
 
 CAPABILITIES:
 You can use these MCP tools to coordinate meetings intelligently:
@@ -153,6 +165,7 @@ INSTRUCTIONS:
 4. Consider fitness context - avoid meetings right after intense workouts
 5. Always provide helpful, actionable responses
 6. Format responses for SMS (concise but informative)
+7. **CRITICAL**: When calculating dates, be extremely precise!
 
 RESPONSE STYLE:
 - Use emojis appropriately (📅 🕐 👥 🔗 💪)
@@ -181,7 +194,7 @@ Please help coordinate this request using the available MCP tools. Consider:
 
 Use the MCP tools as needed and provide a helpful SMS response. If you're scheduling something, actually create the event!"""
 
-    async def _process_llm_response(self, response, team_member, db) -> str:
+    async def _process_llm_response(self, response, team_member, db, message_text: str) -> str:
         """Process Claude's response and execute any tool calls"""
         
         tool_results = []
@@ -196,7 +209,26 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
                 
                 logger.info(f"🔧 Executing MCP tool: {tool_name} with input: {json.dumps(tool_input, indent=2)}")
                 
-                tool_result = await self._execute_mcp_tool(tool_name, tool_input, team_member, db)
+                # CRITICAL DEBUG: Show what Claude chose for dates
+                if tool_name == "create_calendar_event":
+                    start_time_input = tool_input.get('start_time', 'NOT PROVIDED')
+                    logger.info(f"😨 [CLAUDE DATE DEBUG] Claude chose start_time: '{start_time_input}'")
+                    logger.info(f"😨 [CLAUDE DATE DEBUG] Original SMS message: '{message_text}'")
+                    
+                    # Check if Claude made the right choice
+                    current_time = datetime.now()
+                    tomorrow = current_time + timedelta(days=1)
+                    logger.info(f"😨 [CLAUDE DATE DEBUG] Today is {current_time.strftime('%A %B %d, %Y')}")
+                    logger.info(f"😨 [CLAUDE DATE DEBUG] Tomorrow should be {tomorrow.strftime('%A %B %d, %Y')}")
+                    
+                    if "tomorrow" in message_text.lower():
+                        logger.info(f"😨 [CLAUDE DATE DEBUG] User said 'tomorrow' - Claude should pick {tomorrow.strftime('%Y-%m-%d')}")
+                        if start_time_input and tomorrow.strftime('%Y-%m-%d') not in start_time_input:
+                            logger.error(f"🐛 [CLAUDE BUG] Claude picked wrong date for 'tomorrow'!")
+                            logger.error(f"🐛 Expected: {tomorrow.strftime('%Y-%m-%d')} ({tomorrow.strftime('%A')})")
+                            logger.error(f"🐛 Claude chose: {start_time_input}")
+                
+                tool_result = await self._execute_mcp_tool(tool_name, tool_input, team_member, db, message_text)
                 tool_results.append({
                     "tool": tool_name,
                     "input": tool_input,
@@ -230,21 +262,21 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
             # Claude responded directly without tools
             return final_text if final_text else "I'm here to help! Try asking me to schedule a meeting or check your calendar."
     
-    async def _execute_mcp_tool(self, tool_name: str, tool_input: Dict, team_member, db) -> Dict:
+    async def _execute_mcp_tool(self, tool_name: str, tool_input: Dict, team_member, db, message_text: str) -> Dict:
         """Execute specific MCP tool and return results"""
         
         try:
             if tool_name == "create_calendar_event":
-                return await self._tool_create_calendar_event(tool_input, team_member, db)
+                return await self._tool_create_calendar_event(tool_input, team_member, db, message_text)
             
             elif tool_name == "find_calendar_free_time":
-                return await self._tool_find_free_time(tool_input, team_member, db)
+                return await self._tool_find_free_time(tool_input, team_member, db, message_text)
             
             elif tool_name == "list_upcoming_events":
-                return await self._tool_list_events(tool_input, team_member, db)
+                return await self._tool_list_events(tool_input, team_member, db, message_text)
             
             elif tool_name == "get_strava_recent_activities":
-                return await self._tool_get_strava_activities(tool_input, team_member)
+                return await self._tool_get_strava_activities(tool_input, team_member, message_text)
             
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
@@ -253,12 +285,41 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
             logger.error(f"❌ Error executing tool {tool_name}: {e}")
             return {"error": str(e)}
     
-    async def _tool_create_calendar_event(self, input_data: Dict, team_member, db) -> Dict:
+    async def _tool_create_calendar_event(self, input_data: Dict, team_member, db, message_text: str) -> Dict:
         """Create calendar event using MCP calendar client"""
         
         try:
             # Parse start time - handle various formats
             start_time_str = input_data["start_time"]
+            
+            # BULLETPROOF DATE OVERRIDE: If user said "tomorrow" but Claude picked wrong date, fix it!
+            if "tomorrow" in message_text.lower():
+                current_time = datetime.now()
+                tomorrow = current_time + timedelta(days=1)
+                expected_date = tomorrow.strftime('%Y-%m-%d')
+                
+                logger.info(f"🛡️ [DATE OVERRIDE] User said 'tomorrow', forcing date to {expected_date} ({tomorrow.strftime('%A')})")
+                
+                # Extract time from Claude's choice, but force the date to be tomorrow
+                time_part = "19:00"  # Default 7 PM
+                if start_time_str:
+                    # Try to extract time from Claude's input
+                    import re
+                    time_match = re.search(r'T(\d{2}:\d{2})', start_time_str)
+                    if time_match:
+                        time_part = time_match.group(1)
+                    elif "lunch" in message_text.lower():
+                        time_part = "13:00"  # 1 PM for lunch
+                    elif "dinner" in message_text.lower():
+                        time_part = "18:00"  # 6 PM for dinner
+                    elif "breakfast" in message_text.lower():
+                        time_part = "09:00"  # 9 AM for breakfast
+                
+                # Force tomorrow's date with extracted time
+                corrected_start_time_str = f"{expected_date}T{time_part}:00"
+                logger.info(f"🛡️ [DATE OVERRIDE] Corrected start_time: {corrected_start_time_str}")
+                start_time_str = corrected_start_time_str
+            
             start_time = self._parse_datetime(start_time_str)
             
             logger.info(f"🗓️ CALENDAR EVENT CREATION ATTEMPT:")
@@ -350,7 +411,7 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
             logger.error(f"❌ Calendar event creation failed: {str(e)}", exc_info=True)
             return {"error": f"Calendar event creation failed: {str(e)}"}
     
-    async def _tool_list_events(self, input_data: Dict, team_member, db) -> Dict:
+    async def _tool_list_events(self, input_data: Dict, team_member, db, message_text: str) -> Dict:
         """List upcoming events"""
         
         try:
@@ -387,7 +448,7 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
         except Exception as e:
             return {"error": f"Failed to list events: {str(e)}"}
     
-    async def _tool_find_free_time(self, input_data: Dict, team_member, db) -> Dict:
+    async def _tool_find_free_time(self, input_data: Dict, team_member, db, message_text: str) -> Dict:
         """Find free time using calendar client"""
         
         try:
@@ -419,7 +480,7 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
         except Exception as e:
             return {"error": f"Failed to find free time: {str(e)}"}
     
-    async def _tool_get_strava_activities(self, input_data: Dict, team_member) -> Dict:
+    async def _tool_get_strava_activities(self, input_data: Dict, team_member, message_text: str) -> Dict:
         """Get Strava activities for fitness context"""
         
         if not self.strava_client:
