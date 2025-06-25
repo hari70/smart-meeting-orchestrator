@@ -320,7 +320,7 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
                 logger.info(f"🛡️ [DATE OVERRIDE] Corrected start_time: {corrected_start_time_str}")
                 start_time_str = corrected_start_time_str
             
-            start_time = self._parse_datetime(start_time_str)
+            start_time = self._parse_datetime_bulletproof(start_time_str, message_text)
             
             logger.info(f"🗓️ CALENDAR EVENT CREATION ATTEMPT:")
             logger.info(f"   Title: {input_data['title']}")
@@ -514,167 +514,183 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
         except Exception as e:
             return {"error": f"Failed to get Strava data: {e}"}
     
-    def _parse_datetime(self, time_str: str) -> Optional[datetime]:
-        """Parse various datetime formats"""
+    def _parse_datetime_bulletproof(self, time_str: str, original_message: str) -> Optional[datetime]:
+        """
+        BULLETPROOF DATE PARSING - FIXED VERSION
+        Simple, reliable, and debuggable
+        """
         
-        logger.info(f"🕰️ [DATETIME DEBUG] Original input string: '{time_str}'")
-        logger.info(f"🕰️ Parsing datetime string: '{time_str}'")
+        logger.info(f"🛡️ [BULLETPROOF PARSER] Input: '{time_str}' from message: '{original_message}'")
+        
+        # Get current time once and use it consistently
+        now = datetime.now()
+        logger.info(f"🛡️ [BULLETPROOF PARSER] Current time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}")
         
         try:
-            # Try ISO format first
-            if 'T' in time_str or '+' in time_str:
-                result = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
-                logger.info(f"✅ Parsed ISO format: {result}")
-                return result
+            # STEP 1: Handle ISO datetime formats first
+            if time_str and ('T' in time_str or '+' in time_str or 'Z' in time_str):
+                try:
+                    result = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+                    logger.info(f"✅ [BULLETPROOF PARSER] Parsed ISO format: {result}")
+                    return result
+                except:
+                    logger.warning(f"⚠️ [BULLETPROOF PARSER] Failed to parse ISO format: {time_str}")
             
-            # Use simple server time
-            now = datetime.now()
-            logger.info(f"🕰️ Current server time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}")
-            logger.info(f"📅 Today is: {now.strftime('%A')} (weekday #{now.weekday()})")
-            eastern = None
+            # STEP 2: Parse natural language from ORIGINAL MESSAGE (more reliable)
+            message_lower = original_message.lower()
+            logger.info(f"🔍 [BULLETPROOF PARSER] Analyzing original message: '{message_lower}'")
             
-            time_lower = time_str.lower().strip()
-            
-            logger.info(f"🔍 Processing natural language: '{time_lower}'")
-            
-            # Extract date part
-            base_date = None
-            if "tomorrow" in time_lower:
-                logger.info(f"😨 [DATE BUG DEBUG] Found 'tomorrow' in input: '{time_lower}'")
-                logger.info(f"📅 [DATE BUG DEBUG] Current datetime object: {now}")
-                logger.info(f"📅 [DATE BUG DEBUG] Current date: {now.date()}")
-                logger.info(f"📅 [DATE BUG DEBUG] Current weekday: {now.weekday()} (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun)")
+            # STEP 3: Determine target date using simple, foolproof logic
+            if "tomorrow" in message_lower:
+                target_date = (now + timedelta(days=1)).date()
+                logger.info(f"📅 [BULLETPROOF PARSER] TOMORROW detected: {target_date} ({target_date.strftime('%A')})")
                 
-                tomorrow = now + timedelta(days=1)
-                logger.info(f"📅 [DATE BUG DEBUG] After adding 1 day: {tomorrow}")
-                logger.info(f"📅 [DATE BUG DEBUG] Tomorrow date object: {tomorrow.date()}")
-                logger.info(f"📅 [DATE BUG DEBUG] Tomorrow weekday: {tomorrow.weekday()}")
+            elif "today" in message_lower:
+                target_date = now.date()
+                logger.info(f"📅 [BULLETPROOF PARSER] TODAY detected: {target_date} ({target_date.strftime('%A')})")
                 
-                base_date = tomorrow.date()
-                logger.info(f"📅 [DATE BUG DEBUG] Final base_date: {base_date}")
-                logger.info(f"📅 [DATE BUG DEBUG] Final base_date formatted: {base_date.strftime('%A, %B %d, %Y')}")
-                
-                logger.info(f"📅 TOMORROW CALCULATION:")
-                logger.info(f"   Today is {now.strftime('%A %B %d, %Y')}")
-                logger.info(f"   Tomorrow will be {tomorrow.strftime('%A %B %d, %Y')}")
-                logger.info(f"   Using date: {base_date}")
-            elif "today" in time_lower:
-                base_date = now.date()
-                logger.info(f"📅 Date: today = {base_date} ({now.strftime('%A')})")
-            elif "weekend" in time_lower or "saturday" in time_lower:
+            elif "this weekend" in message_lower or "weekend" in message_lower:
                 # Next Saturday
                 days_until_saturday = (5 - now.weekday()) % 7
-                if days_until_saturday == 0:
-                    days_until_saturday = 7
-                base_date = (now + timedelta(days=days_until_saturday)).date()
-                logger.info(f"📅 Date: next saturday = {base_date}")
-            elif "sunday" in time_lower:
-                days_until_sunday = (6 - now.weekday()) % 7
-                if days_until_sunday == 0:
-                    days_until_sunday = 7
-                base_date = (now + timedelta(days=days_until_sunday)).date()
-                logger.info(f"📅 Date: next sunday = {base_date}")
+                if days_until_saturday == 0:  # It's Saturday
+                    days_until_saturday = 7  # Next Saturday
+                target_date = (now + timedelta(days=days_until_saturday)).date()
+                logger.info(f"📅 [BULLETPROOF PARSER] WEEKEND detected: {target_date} ({target_date.strftime('%A')})")
+                
+            elif "next week" in message_lower:
+                # Next Monday
+                days_until_monday = (7 - now.weekday()) % 7
+                if days_until_monday == 0:  # It's Monday
+                    days_until_monday = 7  # Next Monday
+                target_date = (now + timedelta(days=days_until_monday)).date()
+                logger.info(f"📅 [BULLETPROOF PARSER] NEXT WEEK detected: {target_date} ({target_date.strftime('%A')})")
+                
             else:
-                # Try to find day names (monday, tuesday, etc.)
-                days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-                for i, day in enumerate(days):
-                    if day in time_lower:
-                        days_ahead = (i - now.weekday()) % 7
-                        if days_ahead == 0:
-                            days_ahead = 7  # Next week if it's the same day
-                        base_date = (now + timedelta(days=days_ahead)).date()
-                        logger.info(f"📅 Date: next {day} = {base_date}")
+                # Check for specific weekdays
+                weekdays = {
+                    'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+                    'friday': 4, 'saturday': 5, 'sunday': 6
+                }
+                
+                target_date = None
+                for day_name, day_num in weekdays.items():
+                    if day_name in message_lower:
+                        days_ahead = (day_num - now.weekday()) % 7
+                        if days_ahead == 0:  # Same day
+                            days_ahead = 7  # Next week
+                        target_date = (now + timedelta(days=days_ahead)).date()
+                        logger.info(f"📅 [BULLETPROOF PARSER] {day_name.upper()} detected: {target_date} ({target_date.strftime('%A')})")
                         break
                 
-                if not base_date:
-                    # Default to tomorrow if no date found
-                    base_date = (now + timedelta(days=1)).date()
-                    logger.warning(f"⚠️ No date found, defaulting to tomorrow: {base_date}")
+                if not target_date:
+                    # Default fallback: tomorrow
+                    target_date = (now + timedelta(days=1)).date()
+                    logger.info(f"📅 [BULLETPROOF PARSER] NO DATE FOUND - defaulting to tomorrow: {target_date} ({target_date.strftime('%A')})")
             
-            # Extract time part
-            hour = 19  # Default to 7 PM
-            minute = 0
+            # STEP 4: Determine time using simple patterns
+            target_hour = 19  # Default 7 PM
+            target_minute = 0
             
-            # Look for time patterns
-            import re
-            
-            # Pattern 1: "2pm", "2 pm", "14:00", "2:30pm", "2:30 pm"
+            # Look for time indicators in original message
             time_patterns = [
-                r'(\d{1,2})\s*:?\s*(\d{2})?\s*(pm|am)',  # 2pm, 2:30pm, 2 pm, 2:30 pm
-                r'(\d{1,2})\s*:?\s*(\d{2})',            # 14:00, 2:30
-                r'(\d{1,2})\s*(pm|am)',                  # 2pm, 2am
+                (r'(\d{1,2}):(\d{2})\s*(am|pm)', 'hour_minute_ampm'),
+                (r'(\d{1,2})\s*(am|pm)', 'hour_ampm'),
+                (r'(\d{1,2}):(\d{2})', 'hour_minute_24h'),
+                (r'(\d{1,2})\s*pm', 'hour_pm'),
+                (r'(\d{1,2})\s*am', 'hour_am'),
             ]
             
             time_found = False
-            for pattern in time_patterns:
-                match = re.search(pattern, time_lower)
+            for pattern, pattern_type in time_patterns:
+                match = re.search(pattern, message_lower)
                 if match:
-                    hour_str = match.group(1)
-                    minute_str = match.group(2) if len(match.groups()) > 1 and match.group(2) else "0"
-                    am_pm = match.group(3) if len(match.groups()) > 2 else None
-                    
-                    hour = int(hour_str)
-                    minute = int(minute_str) if minute_str and minute_str.isdigit() else 0
-                    
-                    # Handle AM/PM
-                    if am_pm:
-                        if am_pm == 'pm' and hour != 12:
+                    if pattern_type == 'hour_minute_ampm':
+                        hour = int(match.group(1))
+                        minute = int(match.group(2))
+                        ampm = match.group(3)
+                        if ampm == 'pm' and hour != 12:
                             hour += 12
-                        elif am_pm == 'am' and hour == 12:
+                        elif ampm == 'am' and hour == 12:
                             hour = 0
-                    elif hour < 8:  # If no AM/PM specified and hour < 8, assume PM
-                        hour += 12
+                        target_hour, target_minute = hour, minute
+                        
+                    elif pattern_type == 'hour_ampm':
+                        hour = int(match.group(1))
+                        ampm = match.group(2)
+                        if ampm == 'pm' and hour != 12:
+                            hour += 12
+                        elif ampm == 'am' and hour == 12:
+                            hour = 0
+                        target_hour = hour
+                        
+                    elif pattern_type == 'hour_minute_24h':
+                        target_hour = int(match.group(1))
+                        target_minute = int(match.group(2))
+                        
+                    elif pattern_type in ['hour_pm', 'hour_am']:
+                        hour = int(match.group(1))
+                        if pattern_type == 'hour_pm' and hour != 12:
+                            hour += 12
+                        elif pattern_type == 'hour_am' and hour == 12:
+                            hour = 0
+                        target_hour = hour
                     
                     time_found = True
-                    logger.info(f"🕰️ Time extracted: {hour:02d}:{minute:02d} from '{match.group(0)}'")
+                    logger.info(f"🕐 [BULLETPROOF PARSER] TIME found: {target_hour:02d}:{target_minute:02d} from '{match.group(0)}'")
                     break
             
             if not time_found:
-                # Look for common time words
-                if "morning" in time_lower:
-                    hour = 9
-                    logger.info("🌅 Time: morning = 9:00 AM")
-                elif "afternoon" in time_lower:
-                    hour = 14
-                    logger.info("☀️ Time: afternoon = 2:00 PM")
-                elif "evening" in time_lower:
-                    hour = 18
-                    logger.info("🌆 Time: evening = 6:00 PM")
-                elif "night" in time_lower:
-                    hour = 20
-                    logger.info("🌃 Time: night = 8:00 PM")
+                # Look for time words
+                if any(word in message_lower for word in ['morning', 'breakfast']):
+                    target_hour = 9
+                    logger.info(f"🌅 [BULLETPROOF PARSER] MORNING detected: 9:00 AM")
+                elif any(word in message_lower for word in ['lunch', 'noon']):
+                    target_hour = 12
+                    logger.info(f"☀️ [BULLETPROOF PARSER] LUNCH detected: 12:00 PM")
+                elif any(word in message_lower for word in ['afternoon']):
+                    target_hour = 14
+                    logger.info(f"☀️ [BULLETPROOF PARSER] AFTERNOON detected: 2:00 PM")
+                elif any(word in message_lower for word in ['dinner']):
+                    target_hour = 18
+                    logger.info(f"🍽️ [BULLETPROOF PARSER] DINNER detected: 6:00 PM")
+                elif any(word in message_lower for word in ['evening']):
+                    target_hour = 19
+                    logger.info(f"🌆 [BULLETPROOF PARSER] EVENING detected: 7:00 PM")
+                elif any(word in message_lower for word in ['night']):
+                    target_hour = 20
+                    logger.info(f"🌃 [BULLETPROOF PARSER] NIGHT detected: 8:00 PM")
                 else:
-                    logger.warning(f"⚠️ No time found in '{time_str}', defaulting to 7:00 PM")
+                    logger.info(f"⏰ [BULLETPROOF PARSER] NO TIME WORD - using default: 7:00 PM")
             
-            # Combine date and time (simple approach)
-            logger.info(f"📅 [FINAL DEBUG] About to combine date and time:")
-            logger.info(f"   base_date: {base_date}")
-            logger.info(f"   hour: {hour}, minute: {minute}")
-            
-            result = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
-            
-            logger.info(f"📅 [FINAL DEBUG] Combined result: {result}")
-            logger.info(f"📅 [FINAL DEBUG] Result weekday: {result.weekday()} (0=Mon, 1=Tue, 2=Wed)")
-            logger.info(f"✅ Final parsed datetime: {result.strftime('%A, %B %d, %Y at %I:%M %p')}")
-            
-            # Double-check the math
-            if "tomorrow" in time_str.lower():
-                expected_date = (datetime.now() + timedelta(days=1)).date()
-                if result.date() != expected_date:
-                    logger.error(f"🐛 BUG DETECTED!")
-                    logger.error(f"   Expected tomorrow: {expected_date} ({expected_date.strftime('%A')})")
-                    logger.error(f"   Actually got: {result.date()} ({result.strftime('%A')})")
-                    logger.error(f"   Difference: {(result.date() - expected_date).days} days")
-                else:
-                    logger.info(f"✅ Date calculation verified correct for 'tomorrow'")
-            
-            return result
-            
+            # STEP 5: Combine date and time
+            try:
+                result = datetime.combine(target_date, datetime.min.time().replace(hour=target_hour, minute=target_minute))
+                logger.info(f"✅ [BULLETPROOF PARSER] FINAL RESULT: {result.strftime('%A, %B %d, %Y at %I:%M %p')}")
+                
+                # STEP 6: Verification check
+                if "tomorrow" in message_lower:
+                    expected_date = (now + timedelta(days=1)).date()
+                    if result.date() == expected_date:
+                        logger.info(f"✅ [BULLETPROOF PARSER] VERIFICATION PASSED: Tomorrow correctly calculated")
+                    else:
+                        logger.error(f"❌ [BULLETPROOF PARSER] VERIFICATION FAILED!")
+                        logger.error(f"   Expected: {expected_date} ({expected_date.strftime('%A')})")
+                        logger.error(f"   Got: {result.date()} ({result.strftime('%A')})")
+                
+                return result
+                
+            except ValueError as e:
+                logger.error(f"❌ [BULLETPROOF PARSER] Invalid time: hour={target_hour}, minute={target_minute}, error={e}")
+                # Fallback to 7 PM
+                result = datetime.combine(target_date, datetime.min.time().replace(hour=19, minute=0))
+                logger.warning(f"⚠️ [BULLETPROOF PARSER] Using fallback time: {result}")
+                return result
+                
         except Exception as e:
-            logger.error(f"❌ Failed to parse datetime: {time_str}, error: {e}")
-            # Return tomorrow at 7 PM as fallback (simple approach)
-            fallback = datetime.combine((datetime.now() + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
-            logger.warning(f"⚠️ Using fallback datetime: {fallback}")
+            logger.error(f"❌ [BULLETPROOF PARSER] Unexpected error: {e}")
+            # Ultimate fallback: tomorrow at 7 PM
+            fallback = datetime.combine((now + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
+            logger.warning(f"🆘 [BULLETPROOF PARSER] Ultimate fallback: {fallback}")
             return fallback
     
     async def _get_team_context(self, team_member, db) -> Dict:
