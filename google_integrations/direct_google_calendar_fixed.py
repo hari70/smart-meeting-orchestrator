@@ -1,5 +1,5 @@
-# direct_google_calendar.py - FIXED GOOGLE CALENDAR INTEGRATION
-# Fixed credential handling, token refresh, and simplified logging
+# direct_google_calendar_fixed.py - FIXED TOKEN HANDLING
+# Fixed the token validation logic that was causing mock mode
 
 import os
 import json
@@ -7,11 +7,10 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import requests
-import base64
 
 logger = logging.getLogger(__name__)
 
-class DirectGoogleCalendarClient:
+class DirectGoogleCalendarClientFixed:
     def __init__(self):
         """Initialize direct Google Calendar API client with improved credential handling"""
         
@@ -32,11 +31,8 @@ class DirectGoogleCalendarClient:
         if self.enabled:
             logger.info("✅ Google Calendar API integration enabled")
             logger.info(f"📅 Calendar ID: {self.calendar_id}")
-            if not self.access_token and self.refresh_token:
-                logger.info("🔄 Will refresh access token on first use")
         else:
             logger.warning("⚠️ Google Calendar API not configured - using mock mode")
-            logger.info("💡 Set GOOGLE_CALENDAR_ACCESS_TOKEN or (GOOGLE_CALENDAR_REFRESH_TOKEN + GOOGLE_CALENDAR_CLIENT_ID + GOOGLE_CALENDAR_CLIENT_SECRET)")
     
     def _check_credentials(self) -> bool:
         """Check if we have valid credentials"""
@@ -54,9 +50,6 @@ class DirectGoogleCalendarClient:
             if not self.client_id.endswith('.apps.googleusercontent.com'):
                 logger.error("❌ Invalid client_id format - should end with .apps.googleusercontent.com")
                 return False
-            
-            if not self.refresh_token.startswith('1//'):
-                logger.warning("⚠️ Refresh token doesn't start with '1//' - may be invalid")
             
             return True
         
@@ -192,7 +185,6 @@ class DirectGoogleCalendarClient:
                         if response.status_code in [200, 201]:
                             event_result = response.json()
                             logger.info(f"✅ REAL Google Calendar event created on retry: {event_result.get('id')}")
-                            hangout_link = event_result.get("hangoutLink")
                             return {
                                 "id": event_result.get("id"),
                                 "title": title,
@@ -213,133 +205,6 @@ class DirectGoogleCalendarClient:
         except Exception as e:
             logger.error(f"❌ Error creating Google Calendar event: {e}")
             return None
-    
-    async def list_events(self, days_ahead: int = 7, limit: int = 10) -> List[Dict]:
-        """List upcoming events from Google Calendar"""
-        
-        if not self.enabled:
-            return []
-        
-        try:
-            if not await self._ensure_valid_token():
-                return []
-            
-            now = datetime.utcnow()
-            time_min = now.isoformat() + 'Z'
-            time_max = (now + timedelta(days=days_ahead)).isoformat() + 'Z'
-            
-            headers = {"Authorization": f"Bearer {self.access_token}"}
-            params = {
-                "timeMin": time_min,
-                "timeMax": time_max,
-                "maxResults": limit,
-                "singleEvents": True,
-                "orderBy": "startTime"
-            }
-            
-            response = requests.get(
-                f"{self.base_url}/calendars/{self.calendar_id}/events",
-                headers=headers,
-                params=params,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                events_data = response.json()
-                events = events_data.get("items", [])
-                
-                formatted_events = []
-                for event in events:
-                    start = event["start"].get("dateTime", event["start"].get("date"))
-                    formatted_events.append({
-                        "id": event.get("id"),
-                        "title": event.get("summary", "No title"),
-                        "start_time": start,
-                        "meet_link": event.get("hangoutLink"),
-                        "calendar_link": event.get("htmlLink")
-                    })
-                
-                logger.info(f"📋 Retrieved {len(formatted_events)} events from Google Calendar")
-                return formatted_events
-            
-            else:
-                logger.error(f"❌ Failed to list events: {response.status_code}")
-                return []
-            
-        except Exception as e:
-            logger.error(f"❌ Error listing Google Calendar events: {e}")
-            return []
-    
-    async def delete_event(self, event_id: str) -> bool:
-        """Delete Google Calendar event"""
-        
-        if not self.enabled:
-            return True  # Mock success
-        
-        try:
-            if not await self._ensure_valid_token():
-                return False
-            
-            headers = {"Authorization": f"Bearer {self.access_token}"}
-            
-            response = requests.delete(
-                f"{self.base_url}/calendars/{self.calendar_id}/events/{event_id}",
-                headers=headers,
-                timeout=10
-            )
-            
-            success = response.status_code == 204
-            if success:
-                logger.info(f"✅ Deleted Google Calendar event: {event_id}")
-            else:
-                logger.error(f"❌ Failed to delete event: {response.status_code}")
-            
-            return success
-            
-        except Exception as e:
-            logger.error(f"❌ Error deleting Google Calendar event: {e}")
-            return False
-    
-    async def _ensure_valid_token(self) -> bool:
-        """Ensure we have a valid access token"""
-        
-        # If we have an access token, test if it's valid
-        if self.access_token:
-            if await self._test_token_validity():
-                return True
-            else:
-                logger.warning("⚠️ Access token invalid, attempting refresh...")
-                return await self._refresh_access_token()
-        
-        # If no access token but have refresh credentials, try to refresh
-        if self.refresh_token and self.client_id and self.client_secret:
-            logger.info("🔄 No access token, attempting to refresh...")
-            return await self._refresh_access_token()
-        
-        logger.error("❌ No valid credentials available")
-        return False
-    
-    async def _test_token_validity(self) -> bool:
-        """Test if the current access token is valid"""
-        
-        try:
-            test_url = f"{self.base_url}/calendars/primary"
-            headers = {"Authorization": f"Bearer {self.access_token}"}
-            
-            response = requests.get(test_url, headers=headers, timeout=5)
-            
-            if response.status_code == 200:
-                return True
-            elif response.status_code == 401:
-                logger.warning("⚠️ Access token expired")
-                return False
-            else:
-                logger.warning(f"⚠️ Token test returned {response.status_code}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Error testing token validity: {e}")
-            return False
     
     async def _test_token_with_retry(self) -> bool:
         """Test token validity with retry logic"""
@@ -413,20 +278,11 @@ class DirectGoogleCalendarClient:
                     
             else:
                 logger.error(f"❌ Token refresh failed: {response.status_code}")
-                
-                # Parse error details
                 try:
                     error_data = response.json()
-                    error_type = error_data.get('error', 'unknown')
-                    logger.error(f"❌ Error type: {error_type}")
-                    
-                    if error_type == 'invalid_grant':
-                        logger.error("❌ Refresh token expired - need to re-authorize")
-                    elif error_type == 'unauthorized_client':
-                        logger.error("❌ Invalid client credentials")
+                    logger.error(f"❌ Error details: {error_data}")
                 except:
                     logger.error(f"❌ Response: {response.text[:100]}")
-                
                 return False
                     
         except Exception as e:
@@ -449,37 +305,3 @@ class DirectGoogleCalendarClient:
             "source": "mock",
             "note": "MOCK EVENT - Configure Google Calendar API for real events"
         }
-
-# Configuration helper for quick setup
-def print_setup_guide():
-    """Print quick setup guide for Google Calendar integration"""
-    print("""
-🚀 GOOGLE CALENDAR QUICK SETUP
-
-Method 1: OAuth2 Flow (Recommended)
-1. Go to: https://console.cloud.google.com/
-2. Create project + Enable Google Calendar API
-3. Create OAuth 2.0 credentials (Web application)
-4. Add redirect URI: https://developers.google.com/oauthplayground
-5. Go to: https://developers.google.com/oauthplayground/
-6. Select "Google Calendar API v3" scope
-7. Authorize and get refresh_token
-
-Method 2: Service Account
-1. Create service account in Google Cloud Console
-2. Download JSON key file
-3. Share your calendar with service account email
-
-Railway Environment Variables:
-GOOGLE_CALENDAR_REFRESH_TOKEN=1//your_refresh_token
-GOOGLE_CALENDAR_CLIENT_ID=your_client_id.apps.googleusercontent.com
-GOOGLE_CALENDAR_CLIENT_SECRET=your_client_secret
-
-Test:
-curl -X POST https://your-app.railway.app/test/create-calendar-event \\
-  -H "Content-Type: application/json" \\
-  -d '{"title": "Test Event", "hours_from_now": 2}'
-""")
-
-if __name__ == "__main__":
-    print_setup_guide()

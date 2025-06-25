@@ -569,12 +569,24 @@ async def test_create_calendar_event(request: Request, db: Session = Depends(get
         title = data.get("title", "Test Meeting from API")
         hours_from_now = data.get("hours_from_now", 2)
         
-        # Create test event
-        start_time = datetime.now() + timedelta(hours=hours_from_now)
+        # Create test event - adjust for Eastern timezone
+        # Railway server is UTC, but user expects Eastern time
+        utc_now = datetime.utcnow()
+        
+        # Convert to Eastern (EDT = UTC-4, EST = UTC-5)
+        # For now, assume EDT (summer time)
+        eastern_offset_hours = -4
+        eastern_now = utc_now + timedelta(hours=eastern_offset_hours)
+        
+        # Add the requested hours in Eastern time
+        start_time = eastern_now + timedelta(hours=hours_from_now)
         
         logger.info(f"🧪 MANUAL CALENDAR EVENT TEST:")
         logger.info(f"   Title: {title}")
-        logger.info(f"   Start: {start_time}")
+        logger.info(f"   UTC Now: {utc_now.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        logger.info(f"   Eastern Now: {eastern_now.strftime('%Y-%m-%d %H:%M:%S EDT')}")
+        logger.info(f"   Start: {start_time.strftime('%Y-%m-%d %H:%M:%S EDT')}")
+        logger.info(f"   Hours requested: {hours_from_now}")
         
         # Create Google Meet link
         meet_link = await meet_client.create_meeting(title)
@@ -1049,6 +1061,57 @@ async def test_datetime_parsing(request: Request):
         logger.error(f"❌ Datetime parsing test error: {str(e)}")
         return {"error": str(e)}
 
+@app.post("/debug/timezone-test")
+async def test_timezone_calculation(request: Request):
+    """Debug timezone calculation for calendar events"""
+    try:
+        data = await request.json()
+        hours_from_now = data.get("hours_from_now", 2)
+        
+        # Get current times in different formats
+        from datetime import datetime, timedelta, timezone
+        
+        # Server time (probably UTC on Railway)
+        server_now = datetime.now()
+        server_target = server_now + timedelta(hours=hours_from_now)
+        
+        # UTC time
+        utc_now = datetime.utcnow()
+        utc_target = utc_now + timedelta(hours=hours_from_now)
+        
+        # Eastern time (what user probably expects) - manually calculate offset
+        # EDT is UTC-4, EST is UTC-5
+        eastern_offset = -4  # Assuming EDT (summer time)
+        eastern_now = utc_now + timedelta(hours=eastern_offset)
+        eastern_target = eastern_now + timedelta(hours=hours_from_now)
+        
+        return {
+            "hours_requested": hours_from_now,
+            "server_time": {
+                "now": server_now.strftime("%Y-%m-%d %H:%M:%S"),
+                "target": server_target.strftime("%Y-%m-%d %H:%M:%S"),
+                "timezone": "Server Local (probably UTC)"
+            },
+            "utc_time": {
+                "now": utc_now.strftime("%Y-%m-%d %H:%M:%S"),
+                "target": utc_target.strftime("%Y-%m-%d %H:%M:%S"),
+                "timezone": "UTC"
+            },
+            "eastern_time": {
+                "now": eastern_now.strftime("%Y-%m-%d %H:%M:%S EDT"),
+                "target": eastern_target.strftime("%Y-%m-%d %H:%M:%S EDT"),
+                "timezone": "America/New_York (EDT)"
+            },
+            "diagnosis": {
+                "server_probably_utc": server_now.hour == utc_now.hour,
+                "current_eastern_offset": "UTC-4 (EDT)",
+                "google_calendar_expects": "America/New_York timezone",
+                "hours_difference": (server_now.hour - eastern_now.hour) % 24
+            }
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
 @app.post("/debug/test-calendar-invites")
 async def test_calendar_invites(request: Request, db: Session = Depends(get_db)):
     """Test calendar invite functionality specifically"""
