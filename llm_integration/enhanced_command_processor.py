@@ -160,12 +160,13 @@ You can use these MCP tools to coordinate meetings intelligently:
 
 INSTRUCTIONS:
 1. Parse natural language requests intelligently
-2. Use tools when you need real data (don't assume)
-3. Be proactive - if someone wants to schedule, create the actual event
-4. Consider fitness context - avoid meetings right after intense workouts
+2. **DIRECT ACTION**: When someone asks to schedule something, USE create_calendar_event IMMEDIATELY - don't check availability first!
+3. Be proactive - if someone wants to schedule, create the actual event RIGHT AWAY
+4. Only use find_calendar_free_time if explicitly asked "when are we available?"
 5. Always provide helpful, actionable responses
 6. Format responses for SMS (concise but informative)
 7. **CRITICAL**: When calculating dates, be extremely precise!
+8. **PRIORITY**: Event creation trumps availability checking!
 
 RESPONSE STYLE:
 - Use emojis appropriately (📅 🕐 👥 🔗 💪)
@@ -180,7 +181,13 @@ SMART COORDINATION:
 - If someone mentions workouts, check get_strava_recent_activities
 - Always create Google Meet links for virtual meetings
 
-Remember: You're helping families coordinate better by understanding both calendars AND fitness patterns!"""
+EXAMPLES OF DIRECT ACTION:
+✅ "Schedule family dinner tomorrow at 7pm" → IMMEDIATELY use create_calendar_event
+✅ "Plan meeting this weekend" → IMMEDIATELY use create_calendar_event 
+✅ "Family call tonight at 8pm" → IMMEDIATELY use create_calendar_event
+❌ "Schedule dinner tomorrow" → DON'T use find_calendar_free_time first!
+
+Remember: CREATE FIRST, optimize later! You're helping families coordinate better by understanding both calendars AND fitness patterns!"""
 
     def _create_user_prompt(self, message_text: str, team_member) -> str:
         """Create user prompt with SMS context"""

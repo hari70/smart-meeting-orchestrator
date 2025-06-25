@@ -569,24 +569,12 @@ async def test_create_calendar_event(request: Request, db: Session = Depends(get
         title = data.get("title", "Test Meeting from API")
         hours_from_now = data.get("hours_from_now", 2)
         
-        # Create test event - adjust for Eastern timezone
-        # Railway server is UTC, but user expects Eastern time
-        utc_now = datetime.utcnow()
-        
-        # Convert to Eastern (EDT = UTC-4, EST = UTC-5)
-        # For now, assume EDT (summer time)
-        eastern_offset_hours = -4
-        eastern_now = utc_now + timedelta(hours=eastern_offset_hours)
-        
-        # Add the requested hours in Eastern time
-        start_time = eastern_now + timedelta(hours=hours_from_now)
+        # Create test event
+        start_time = datetime.now() + timedelta(hours=hours_from_now)
         
         logger.info(f"🧪 MANUAL CALENDAR EVENT TEST:")
         logger.info(f"   Title: {title}")
-        logger.info(f"   UTC Now: {utc_now.strftime('%Y-%m-%d %H:%M:%S UTC')}")
-        logger.info(f"   Eastern Now: {eastern_now.strftime('%Y-%m-%d %H:%M:%S EDT')}")
-        logger.info(f"   Start: {start_time.strftime('%Y-%m-%d %H:%M:%S EDT')}")
-        logger.info(f"   Hours requested: {hours_from_now}")
+        logger.info(f"   Start: {start_time}")
         
         # Create Google Meet link
         meet_link = await meet_client.create_meeting(title)
