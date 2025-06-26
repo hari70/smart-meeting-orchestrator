@@ -118,7 +118,7 @@ class LLMCommandProcessor:
             
             # Create LLM prompt with tool access
             system_prompt = self._create_system_prompt(team_member, team_context)
-            user_prompt = self._create_user_prompt(message_text, team_member)
+            user_prompt = self._create_user_prompt(message_text, team_member, conversation)
             
             logger.info(f"🧠 Processing with LLM: {message_text[:50]}...")
             
@@ -176,13 +176,30 @@ HOW TO BE SMART:
 
 BE NATURAL: Respond like a helpful human assistant would via text message. Ask questions when you need clarification. Make reasonable assumptions. Have a conversation!"""
 
-    def _create_user_prompt(self, message_text: str, team_member) -> str:
-        """Create user prompt with SMS context"""
-        return f"""SMS from {team_member.name}: "{message_text}"
-
+    def _create_user_prompt(self, message_text: str, team_member, conversation=None) -> str:
+        """Create user prompt with SMS context and conversation history"""
+        
+        # Build conversation history if available
+        conversation_history = ""
+        if conversation and conversation.context and conversation.context.get("recent_messages"):
+            recent_messages = conversation.context["recent_messages"]
+            if len(recent_messages) > 1:  # More than just current message
+                conversation_history = "\n\nRECENT CONVERSATION HISTORY:\n"
+                for i, msg in enumerate(recent_messages[:-1]):  # Exclude current message
+                    timestamp = msg.get("timestamp", "")
+                    message_content = msg.get("message", "")
+                    conversation_history += f"Previous message {i+1}: \"{message_content}\"\n"
+                conversation_history += "\n"
+                logger.info(f"📚 [CONVERSATION CONTEXT] Including {len(recent_messages)-1} previous messages")
+        
+        base_prompt = f"""SMS from {team_member.name}: "{message_text}"{conversation_history}
 Please respond naturally as their helpful family assistant. Use the available calendar tools when appropriate to help them schedule things, check availability, or answer questions about their calendar.
 
+IMPORTANT: If this appears to be a response to a previous conversation (like "Yes", "No", "Sounds good"), refer to the conversation history above to understand what they're responding to.
+
 If you're not sure about something (like who to invite to an event), just ask! Be conversational and helpful."""
+        
+        return base_prompt
 
     async def _process_llm_response(self, response, team_member, db, message_text: str) -> str:
         """Process Claude's response and execute any tool calls"""
@@ -237,12 +254,27 @@ If you're not sure about something (like who to invite to an event), just ask! B
                 for result in tool_results
             ])
             
+            # 🔥 CONTEXT FIX: Include original message and full context in second Claude call
+            context_prompt = f"""ORIGINAL SMS REQUEST from {team_member.name}: "{message_text}"
+
+TOOL EXECUTION RESULTS:
+{tool_summary}
+
+Please provide a helpful SMS response that:
+1. Acknowledges what they originally asked for
+2. Confirms what was accomplished
+3. Includes relevant details (times, links, etc.)
+4. Keeps it concise for SMS (under 160 chars when possible)
+5. Uses a friendly, conversational tone
+
+Remember: You just helped them with "{message_text}" - make sure your response connects back to their original request!"""
+            
             final_response = self.claude_client.messages.create(
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=400,
                 temperature=0.1,
                 messages=[
-                    {"role": "user", "content": f"Based on these tool results, provide a helpful SMS response to {team_member.name}:\\n\\nTool Results:\\n{tool_summary}\\n\\nKeep it concise, friendly, and include relevant details like meeting links or times."}
+                    {"role": "user", "content": context_prompt}
                 ]
             )
             
