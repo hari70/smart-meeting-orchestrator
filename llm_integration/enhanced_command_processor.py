@@ -43,7 +43,7 @@ class LLMCommandProcessor:
         return [
             {
                 "name": "create_calendar_event",
-                "description": "Create a new calendar event. You can optionally invite family members by including their names in the attendees field.",
+                "description": "Create a new calendar event. Use this AFTER checking conflicts when user requests scheduling. You can optionally invite family members by including their names in the attendees field.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -166,6 +166,11 @@ TOOLS AVAILABLE:
 - create_calendar_event: Create calendar events with invites
 - find_calendar_free_time: Find available time slots
 - list_upcoming_events: See what's coming up
+
+IMPORTANT WORKFLOW:
+1. For scheduling requests: ALWAYS check conflicts first, then CREATE the event if no conflicts
+2. Don't claim you've created an event unless you actually called create_calendar_event
+3. Be honest about what you've actually done vs what you're planning to do
 
 HOW TO BE SMART:
 - If someone says "schedule dinner tomorrow at 7pm" → you can reasonably assume it's a family dinner
