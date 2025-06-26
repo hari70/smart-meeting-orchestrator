@@ -43,16 +43,15 @@ class LLMCommandProcessor:
         return [
             {
                 "name": "create_calendar_event",
-                "description": "Create a new calendar event with attendees and Google Meet link",
+                "description": "Create a new calendar event. You can optionally invite family members by including their names in the attendees field.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
                         "title": {"type": "string", "description": "Event title"},
                         "start_time": {"type": "string", "description": "Start time in ISO format"},
                         "duration_minutes": {"type": "integer", "description": "Duration in minutes", "default": 60},
-                        "attendees": {"type": "array", "items": {"type": "string"}, "description": "List of attendee names"},
-                        "description": {"type": "string", "description": "Event description"},
-                        "check_conflicts": {"type": "boolean", "description": "Check for conflicts before creating", "default": True}
+                        "attendees": {"type": "array", "items": {"type": "string"}, "description": "Optional: Family member names to invite (leave empty for individual events)"},
+                        "description": {"type": "string", "description": "Event description"}
                     },
                     "required": ["title", "start_time"]
                 }
@@ -143,89 +142,47 @@ class LLMCommandProcessor:
             return await self._basic_command_processing(message_text, team_member, conversation, db)
     
     def _create_system_prompt(self, team_member, team_context: Dict) -> str:
-        """Create system prompt for Claude with MCP context"""
+        """Create system prompt for Claude with natural conversation approach"""
         current_time = datetime.now()
         tomorrow = current_time + timedelta(days=1)
         
-        return f"""You are a smart family meeting coordinator with access to Google Calendar and Strava fitness data.
-
-IMPORTANT DATE CONTEXT:
-- TODAY is: {current_time.strftime('%A, %B %d, %Y')}
-- TOMORROW is: {tomorrow.strftime('%A, %B %d, %Y')}
-- Current time: {current_time.strftime('%A, %B %d, %Y at %I:%M %p')}
+        return f"""You are a smart, helpful family assistant who coordinates meetings via SMS. You have access to Google Calendar and can create real events.
 
 CONTEXT:
-- User: {team_member.name} (Phone: {team_member.phone})
-- Team: {team_context['team_name']} ({len(team_context['members'])} members)
-- Members: {', '.join([m['name'] for m in team_context['members']])}
+- Today: {current_time.strftime('%A, %B %d, %Y at %I:%M %p')}
+- Tomorrow: {tomorrow.strftime('%A, %B %d, %Y')}
+- User: {team_member.name}
+- Family: {', '.join([m['name'] for m in team_context['members']])}
 
-DATE CALCULATION RULES:
-- If user says "tomorrow", use {tomorrow.strftime('%Y-%m-%d')} (which is {tomorrow.strftime('%A')})
-- If user says "today", use {current_time.strftime('%Y-%m-%d')} (which is {current_time.strftime('%A')})
-- Be VERY careful with date calculations - always double-check!
+YOUR PERSONALITY:
+- Conversational and natural (like texting a smart friend)
+- Ask clarifying questions when things are unclear
+- Make intelligent assumptions but confirm when important
+- Keep responses concise for SMS (under 160 chars when possible)
+- Use friendly emojis appropriately
 
-CAPABILITIES:
-You can use these MCP tools to coordinate meetings intelligently:
-1. create_calendar_event - Schedule meetings with Google Meet links
-2. find_calendar_free_time - Find when everyone is available  
-3. list_upcoming_events - Check existing calendar commitments
-4. get_strava_recent_activities - Check recent workouts for optimal timing
+TOOLS AVAILABLE:
+- check_calendar_conflicts: Check if a time slot is free
+- create_calendar_event: Create calendar events with invites
+- find_calendar_free_time: Find available time slots
+- list_upcoming_events: See what's coming up
 
-INSTRUCTIONS:
-1. Parse natural language requests intelligently
-2. **MANDATORY CONFLICT CHECK**: For ALL scheduling requests, ALWAYS use check_calendar_conflicts FIRST
-3. **SMART ATTENDEE LOGIC**: 
-   - "Family [event]" = invite all family members
-   - "Schedule a meeting" = just the requester (no family invites)
-   - "Schedule dinner/call with everyone" = invite family
-4. **CONFLICT WORKFLOW**: 
-   - Step 1: ALWAYS check_calendar_conflicts first
-   - Step 2: If conflicts found, use find_calendar_free_time to suggest alternatives
-   - Step 3: Only create_calendar_event if no conflicts OR user accepts alternative time
-5. **CRITICAL**: When calculating dates, be extremely precise!
-6. **PRIORITY**: Prevent double-booking at all costs!
+HOW TO BE SMART:
+- If someone says "schedule dinner tomorrow at 7pm" → you can reasonably assume it's a family dinner
+- If someone says "schedule a work call" → probably just for them
+- If unclear who should be invited, just ask: "Should I invite the family or just you?"
+- If you detect potential conflicts, mention it: "I see you have X at that time, want to try Y instead?"
+- Make events that make sense - don't overthink it
 
-RESPONSE STYLE:
-- Use emojis appropriately (📅 🕐 👥 🔗 💪)
-- Keep messages under 300 characters when possible  
-- Always confirm what action was taken
-- Include relevant details (time, attendees, links)
-- Be friendly and family-oriented
-
-SMART COORDINATION:
-- If asked to schedule, actually use create_calendar_event
-- If asked about availability, use find_calendar_free_time
-- If someone mentions workouts, check get_strava_recent_activities
-- Always create Google Meet links for virtual meetings
-
-EXAMPLES OF SMART CONFLICT-AWARE SCHEDULING:
-✅ "Schedule family dinner tomorrow at 7pm" → check_calendar_conflicts → IF clear → create_calendar_event (with family invites)
-✅ "Schedule a meeting tomorrow at 2pm" → check_calendar_conflicts → IF clear → create_calendar_event (individual, no family)
-⚠️ "Schedule call tomorrow at 3pm" → check_calendar_conflicts → IF CONFLICT FOUND → find_calendar_free_time → suggest "4pm available instead?"
-
-🎯 MANDATORY WORKFLOW:
-1. Parse scheduling request
-2. ALWAYS run check_calendar_conflicts FIRST
-3. If conflicts: find_calendar_free_time + suggest alternatives + DON'T create event
-4. If clear: create_calendar_event with smart attendee logic
-5. Attendee rules: "family/dinner/everyone" = invite family, "meeting/work" = individual only
-
-Remember: NEVER CREATE EVENTS WITHOUT CHECKING CONFLICTS FIRST!"""
+BE NATURAL: Respond like a helpful human assistant would via text message. Ask questions when you need clarification. Make reasonable assumptions. Have a conversation!"""
 
     def _create_user_prompt(self, message_text: str, team_member) -> str:
         """Create user prompt with SMS context"""
         return f"""SMS from {team_member.name}: "{message_text}"
 
-MANDATORY WORKFLOW FOR ALL SCHEDULING REQUESTS:
-1. FIRST: Use check_calendar_conflicts to check for conflicts at the proposed time
-2. IF CONFLICTS FOUND: Use find_calendar_free_time to suggest alternative times - DO NOT CREATE EVENT
-3. IF NO CONFLICTS: Use create_calendar_event to create the event
+Please respond naturally as their helpful family assistant. Use the available calendar tools when appropriate to help them schedule things, check availability, or answer questions about their calendar.
 
-ATTENDEE LOGIC:
-- "Family dinner", "family meeting", "dinner", "lunch", "with everyone" = invite family members
-- "Schedule a meeting", "work call", "appointment" = individual event only
-
-Please follow this workflow exactly. Always check conflicts BEFORE creating events!"""
+If you're not sure about something (like who to invite to an event), just ask! Be conversational and helpful."""
 
     async def _process_llm_response(self, response, team_member, db, message_text: str) -> str:
         """Process Claude's response and execute any tool calls"""
@@ -556,50 +513,40 @@ Please follow this workflow exactly. Always check conflicts BEFORE creating even
             # Create calendar event - THIS IS THE KEY STEP
             logger.info(f"📅 Creating calendar event via calendar client...")
             
-            # Smart attendee logic based on event type and language
+            # Get team members for potential attendees
+            all_family_emails = [member.email for member in team_members if member.email and member.phone != team_member.phone]
+            
+            # Default to no attendees (individual event)
             attendee_emails = []
             
-            # Determine if this should include family members
-            event_title = input_data["title"].lower()
-            message_lower = message_text.lower()
-            
-            include_family = False
-            
-            # Include family for these scenarios:
-            if any(word in event_title for word in ["family", "dinner", "call", "vacation", "trip"]):
-                include_family = True
-                logger.info(f"🏠 FAMILY EVENT detected in title: '{input_data['title']}'")
-            elif any(phrase in message_lower for phrase in ["family", "with everyone", "all of us", "together"]):
-                include_family = True 
-                logger.info(f"🏠 FAMILY EVENT detected in message: '{message_text}'")
-            elif any(word in message_lower for word in ["dinner", "lunch", "breakfast", "bbq", "party"]):
-                include_family = True
-                logger.info(f"🍽️ MEAL EVENT detected - including family")
-            
-            # DON'T include family for generic meetings
-            elif any(phrase in message_lower for phrase in ["meeting", "work", "call", "appointment"]) and "family" not in message_lower:
-                include_family = False
-                logger.info(f"💼 INDIVIDUAL MEETING detected - no family invites")
-            
-            if include_family:
-                # Use emails for attendees (skip the event creator to avoid duplicate)
-                attendee_emails = [member.email for member in team_members if member.email and member.phone != team_member.phone]
-                logger.info(f"👥 Family event - sending invites to {len(attendee_emails)} family members: {', '.join(attendee_emails)}")
+            # Use attendees passed from the tool input (Claude decides who to invite)
+            if "attendees" in input_data and input_data["attendees"]:
+                # Claude specified specific attendees - use those
+                specified_attendees = input_data["attendees"]
+                logger.info(f"👥 Claude specified attendees: {specified_attendees}")
+                
+                # Map names to emails if possible
+                for attendee in specified_attendees:
+                    # Try to find matching family member
+                    for member in team_members:
+                        if member.name.lower() in attendee.lower() or attendee.lower() in member.name.lower():
+                            if member.email and member.phone != team_member.phone:
+                                attendee_emails.append(member.email)
+                                break
+                logger.info(f"📧 Mapped to emails: {attendee_emails}")
             else:
-                # Individual event - no attendees
-                logger.info(f"👤 Individual event - no family invites sent")
+                logger.info(f"👤 No attendees specified - creating individual event")
             
-            # Debug: Show all team members and their email status
+            # Log attendee decision
+            if attendee_emails:
+                logger.info(f"👥 Event will include {len(attendee_emails)} attendees: {', '.join(attendee_emails)}")
+            else:
+                logger.info(f"👤 Individual event - no attendees")
+            
+            # Debug: Show all team members
             for member in team_members:
-                invited = "✅ INVITED" if (include_family and member.email and member.phone != team_member.phone) else "❌ Not invited"
-                logger.info(f"👤 {member.name} ({member.phone}) - Email: {member.email or 'MISSING'} - {invited}")
-            if include_family and not attendee_emails:
-                logger.warning("⚠️ Family event requested but no family member emails found!")
-                logger.warning("💡 Make sure family members have email addresses in the database.")
-            elif include_family and attendee_emails:
-                logger.info(f"✅ Family invites will be sent to: {', '.join(attendee_emails)}")
-            else:
-                logger.info(f"📝 Individual event - no invites needed")
+                invited = "✅ INVITED" if (member.email and member.email in attendee_emails) else "❌ Not invited"
+                logger.info(f"👤 {member.name} ({member.phone}) - {invited}")
             
             event = await self.calendar_client.create_event(
                 title=input_data["title"],
