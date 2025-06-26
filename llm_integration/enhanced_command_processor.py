@@ -173,13 +173,17 @@ You can use these MCP tools to coordinate meetings intelligently:
 
 INSTRUCTIONS:
 1. Parse natural language requests intelligently
-2. **PRIMARY**: When someone asks to schedule something, USE create_calendar_event to create the event
-3. **OPTIONAL**: If check_calendar_conflicts is available, use it first, but DON'T fail if it doesn't work
-4. **FALLBACK**: If conflict detection fails, create the event anyway
-5. Always provide helpful, actionable responses
-6. Format responses for SMS (concise but informative)
-7. **CRITICAL**: When calculating dates, be extremely precise!
-8. **PRIORITY**: Event creation success is more important than conflict detection!
+2. **MANDATORY CONFLICT CHECK**: For ALL scheduling requests, ALWAYS use check_calendar_conflicts FIRST
+3. **SMART ATTENDEE LOGIC**: 
+   - "Family [event]" = invite all family members
+   - "Schedule a meeting" = just the requester (no family invites)
+   - "Schedule dinner/call with everyone" = invite family
+4. **CONFLICT WORKFLOW**: 
+   - Step 1: ALWAYS check_calendar_conflicts first
+   - Step 2: If conflicts found, use find_calendar_free_time to suggest alternatives
+   - Step 3: Only create_calendar_event if no conflicts OR user accepts alternative time
+5. **CRITICAL**: When calculating dates, be extremely precise!
+6. **PRIORITY**: Prevent double-booking at all costs!
 
 RESPONSE STYLE:
 - Use emojis appropriately (📅 🕐 👥 🔗 💪)
@@ -194,30 +198,34 @@ SMART COORDINATION:
 - If someone mentions workouts, check get_strava_recent_activities
 - Always create Google Meet links for virtual meetings
 
-EXAMPLES OF SMART BUT RELIABLE SCHEDULING:
-✅ "Schedule family dinner tomorrow at 7pm" → create_calendar_event (primary action)
-✅ "Plan meeting this weekend" → create_calendar_event (primary action)
-✅ "When are we free this week?" → find_calendar_free_time (availability query)
+EXAMPLES OF SMART CONFLICT-AWARE SCHEDULING:
+✅ "Schedule family dinner tomorrow at 7pm" → check_calendar_conflicts → IF clear → create_calendar_event (with family invites)
+✅ "Schedule a meeting tomorrow at 2pm" → check_calendar_conflicts → IF clear → create_calendar_event (individual, no family)
+⚠️ "Schedule call tomorrow at 3pm" → check_calendar_conflicts → IF CONFLICT FOUND → find_calendar_free_time → suggest "4pm available instead?"
 
-🎯 WORKFLOW (SIMPLIFIED FOR RELIABILITY):
+🎯 MANDATORY WORKFLOW:
 1. Parse scheduling request
-2. For scheduling requests: create_calendar_event immediately
-3. For availability queries: find_calendar_free_time 
-4. Conflict detection and workout context are BONUS features, not requirements
+2. ALWAYS run check_calendar_conflicts FIRST
+3. If conflicts: find_calendar_free_time + suggest alternatives + DON'T create event
+4. If clear: create_calendar_event with smart attendee logic
+5. Attendee rules: "family/dinner/everyone" = invite family, "meeting/work" = individual only
 
-Remember: SUCCESSFUL EVENT CREATION is the top priority! Conflict detection is nice-to-have but shouldn't break the core functionality."""
+Remember: NEVER CREATE EVENTS WITHOUT CHECKING CONFLICTS FIRST!"""
 
     def _create_user_prompt(self, message_text: str, team_member) -> str:
         """Create user prompt with SMS context"""
         return f"""SMS from {team_member.name}: "{message_text}"
 
-Please help coordinate this request using the available MCP tools. Consider:
-1. What specific action is being requested?
-2. Do I need to check calendars or fitness data first?
-3. What information should I gather before responding?
-4. How can I provide the most helpful response?
+MANDATORY WORKFLOW FOR ALL SCHEDULING REQUESTS:
+1. FIRST: Use check_calendar_conflicts to check for conflicts at the proposed time
+2. IF CONFLICTS FOUND: Use find_calendar_free_time to suggest alternative times - DO NOT CREATE EVENT
+3. IF NO CONFLICTS: Use create_calendar_event to create the event
 
-Use the MCP tools as needed and provide a helpful SMS response. If you're scheduling something, actually create the event!"""
+ATTENDEE LOGIC:
+- "Family dinner", "family meeting", "dinner", "lunch", "with everyone" = invite family members
+- "Schedule a meeting", "work call", "appointment" = individual event only
+
+Please follow this workflow exactly. Always check conflicts BEFORE creating events!"""
 
     async def _process_llm_response(self, response, team_member, db, message_text: str) -> str:
         """Process Claude's response and execute any tool calls"""
@@ -548,19 +556,50 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
             # Create calendar event - THIS IS THE KEY STEP
             logger.info(f"📅 Creating calendar event via calendar client...")
             
-            # Use emails for attendees (skip the event creator to avoid duplicate)
-            attendee_emails = [member.email for member in team_members if member.email and member.phone != team_member.phone]
-            logger.info(f"👥 Attendee emails extracted: {attendee_emails}")
+            # Smart attendee logic based on event type and language
+            attendee_emails = []
+            
+            # Determine if this should include family members
+            event_title = input_data["title"].lower()
+            message_lower = message_text.lower()
+            
+            include_family = False
+            
+            # Include family for these scenarios:
+            if any(word in event_title for word in ["family", "dinner", "call", "vacation", "trip"]):
+                include_family = True
+                logger.info(f"🏠 FAMILY EVENT detected in title: '{input_data['title']}'")
+            elif any(phrase in message_lower for phrase in ["family", "with everyone", "all of us", "together"]):
+                include_family = True 
+                logger.info(f"🏠 FAMILY EVENT detected in message: '{message_text}'")
+            elif any(word in message_lower for word in ["dinner", "lunch", "breakfast", "bbq", "party"]):
+                include_family = True
+                logger.info(f"🍽️ MEAL EVENT detected - including family")
+            
+            # DON'T include family for generic meetings
+            elif any(phrase in message_lower for phrase in ["meeting", "work", "call", "appointment"]) and "family" not in message_lower:
+                include_family = False
+                logger.info(f"💼 INDIVIDUAL MEETING detected - no family invites")
+            
+            if include_family:
+                # Use emails for attendees (skip the event creator to avoid duplicate)
+                attendee_emails = [member.email for member in team_members if member.email and member.phone != team_member.phone]
+                logger.info(f"👥 Family event - sending invites to {len(attendee_emails)} family members: {', '.join(attendee_emails)}")
+            else:
+                # Individual event - no attendees
+                logger.info(f"👤 Individual event - no family invites sent")
             
             # Debug: Show all team members and their email status
             for member in team_members:
-                logger.info(f"👤 Team member: {member.name} ({member.phone}) - Email: {member.email or 'MISSING'}")
-            
-            if not attendee_emails:
-                logger.warning("⚠️ No attendee emails found! Event will be created without invites.")
+                invited = "✅ INVITED" if (include_family and member.email and member.phone != team_member.phone) else "❌ Not invited"
+                logger.info(f"👤 {member.name} ({member.phone}) - Email: {member.email or 'MISSING'} - {invited}")
+            if include_family and not attendee_emails:
+                logger.warning("⚠️ Family event requested but no family member emails found!")
                 logger.warning("💡 Make sure family members have email addresses in the database.")
+            elif include_family and attendee_emails:
+                logger.info(f"✅ Family invites will be sent to: {', '.join(attendee_emails)}")
             else:
-                logger.info(f"✅ Will send invites to {len(attendee_emails)} attendees: {', '.join(attendee_emails)}")
+                logger.info(f"📝 Individual event - no invites needed")
             
             event = await self.calendar_client.create_event(
                 title=input_data["title"],
