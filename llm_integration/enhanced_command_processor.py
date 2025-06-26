@@ -173,10 +173,10 @@ TOOLS AVAILABLE:
 
 IMPORTANT WORKFLOW - FOLLOW EXACTLY:
 1. For ANY scheduling request: You MUST call check_calendar_conflicts first
-2. If no conflicts found: You MUST immediately call create_calendar_event 
-3. NEVER claim you created an event unless create_calendar_event was actually called
-4. If you only check conflicts but don't create the event, you have failed the user
-5. Be honest: say "I can check the time is free" vs "I've created the event"
+2. If no conflicts found: You MUST immediately call create_calendar_event in the SAME response
+3. Use multiple tools in sequence - don't stop after just checking conflicts
+4. Tool results are for YOUR decision making, not messages to relay to the user
+5. Only respond to user AFTER you've completed all necessary tool calls
 
 HOW TO BE SMART:
 - If someone says "schedule dinner tomorrow at 7pm" → you can reasonably assume it's a family dinner
@@ -187,16 +187,17 @@ HOW TO BE SMART:
 
 BE NATURAL: Respond like a helpful human assistant would via text message. Ask questions when you need clarification. Make reasonable assumptions. Have a conversation!
 
-CRITICAL: If check_calendar_conflicts returns "NEXT_STEP_REQUIRED", you MUST call create_calendar_event immediately. Failure to do so means the user's meeting won't be created and you will have failed them completely.
-
 CORRECT TOOL WORKFLOW EXAMPLES:
 ✅ User: "Schedule lunch tomorrow at noon"
    Step 1: Call check_calendar_conflicts 
-   Step 2: Call create_calendar_event
-   Response: "Lunch meeting created for tomorrow at noon! Here's your calendar link..."
+   Step 2: Call create_calendar_event (in same response)
+   Step 3: Respond: "Lunch meeting created for tomorrow at noon! Here's your calendar link..."
 
-❌ WRONG: Only calling check_calendar_conflicts and claiming event was created
-❌ WRONG: Saying "I've added it to your calendar" without calling create_calendar_event"""
+❌ WRONG EXAMPLE:
+   Step 1: Call check_calendar_conflicts
+   Step 2: Respond: "Time slot available! Should I create it?" (MISSING create_calendar_event)
+   
+❌ WRONG: Telling user about tool requirements instead of just using the tools"""
 
     def _create_user_prompt(self, message_text: str, team_member, conversation=None) -> str:
         """Create user prompt with SMS context and conversation history"""
@@ -215,7 +216,10 @@ CORRECT TOOL WORKFLOW EXAMPLES:
                 logger.info(f"📚 [CONVERSATION CONTEXT] Including {len(recent_messages)-1} previous messages")
         
         base_prompt = f"""SMS from {team_member.name}: "{message_text}"{conversation_history}
+
 Please respond naturally as their helpful family assistant. Use the available calendar tools when appropriate to help them schedule things, check availability, or answer questions about their calendar.
+
+For scheduling requests: Use check_calendar_conflicts first, then create_calendar_event if no conflicts (both in same response). Complete all necessary tool calls before responding to the user.
 
 IMPORTANT: If this appears to be a response to a previous conversation (like "Yes", "No", "Sounds good"), refer to the conversation history above to understand what they're responding to.
 
@@ -405,8 +409,8 @@ Remember: You just helped them with "{message_text}" - make sure your response c
                     "has_conflicts": False,
                     "message": "Time slot is available",
                     "suggested_action": "create_event",
-                    "NEXT_STEP_REQUIRED": "YOU MUST NOW CALL create_calendar_event TO COMPLETE THE USER'S REQUEST",
-                    "WARNING": "DO NOT respond to user without calling create_calendar_event first"
+                    "claude_instruction": "You must now call create_calendar_event tool to complete this scheduling request",
+                    "ready_to_create": True
                 }
                 
         except Exception as e:
