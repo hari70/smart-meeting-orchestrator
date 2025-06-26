@@ -270,6 +270,119 @@ class DirectGoogleCalendarClient:
             logger.error(f"❌ Error listing Google Calendar events: {e}")
             return []
     
+    async def check_conflicts(self, start_time: datetime, duration_minutes: int = 60, attendees: List[str] = None) -> Dict:
+        """Check for scheduling conflicts for proposed meeting time"""
+        
+        if not self.enabled:
+            return {"conflicts": [], "has_conflicts": False, "message": "Calendar API not available"}
+        
+        try:
+            if not await self._ensure_valid_token():
+                return {"conflicts": [], "has_conflicts": False, "message": "Calendar authentication failed"}
+            
+            end_time = start_time + timedelta(minutes=duration_minutes)
+            
+            # Query for events during the proposed time
+            time_min = start_time.isoformat() + 'Z'
+            time_max = end_time.isoformat() + 'Z'
+            
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            params = {
+                "timeMin": time_min,
+                "timeMax": time_max,
+                "singleEvents": True,
+                "orderBy": "startTime"
+            }
+            
+            logger.info(f"🔍 Checking conflicts for {start_time.strftime('%A, %B %d at %I:%M %p')}")
+            
+            response = requests.get(
+                f"{self.base_url}/calendars/{self.calendar_id}/events",
+                headers=headers,
+                params=params,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                events_data = response.json()
+                events = events_data.get("items", [])
+                
+                conflicts = []
+                for event in events:
+                    event_start = event["start"].get("dateTime", event["start"].get("date"))
+                    event_end = event["end"].get("dateTime", event["end"].get("date"))
+                    
+                    conflicts.append({
+                        "title": event.get("summary", "Busy"),
+                        "start": event_start,
+                        "end": event_end,
+                        "calendar_link": event.get("htmlLink")
+                    })
+                
+                if conflicts:
+                    logger.info(f"⚠️ Found {len(conflicts)} scheduling conflicts")
+                    conflict_titles = [c["title"] for c in conflicts]
+                    return {
+                        "conflicts": conflicts,
+                        "has_conflicts": True,
+                        "message": f"Conflict with: {', '.join(conflict_titles)}"
+                    }
+                else:
+                    logger.info(f"✅ No conflicts found for proposed time")
+                    return {
+                        "conflicts": [],
+                        "has_conflicts": False,
+                        "message": "Time slot is available"
+                    }
+            
+            else:
+                logger.error(f"❌ Failed to check conflicts: {response.status_code}")
+                return {"conflicts": [], "has_conflicts": False, "message": "Unable to check calendar"}
+            
+        except Exception as e:
+            logger.error(f"❌ Error checking conflicts: {e}")
+            return {"conflicts": [], "has_conflicts": False, "message": f"Error: {str(e)}"}
+    
+    async def find_free_time(self, duration_minutes: int = 60, days_ahead: int = 7, preferred_hours: List[int] = None) -> Optional[datetime]:
+        """Find next available free time slot"""
+        
+        if not self.enabled:
+            # Return mock suggestion
+            return datetime.now() + timedelta(hours=2)
+        
+        try:
+            if not await self._ensure_valid_token():
+                return None
+            
+            preferred_hours = preferred_hours or [9, 10, 11, 14, 15, 16, 17, 18, 19]  # Business hours + evening
+            
+            # Check each day for availability
+            for day_offset in range(days_ahead):
+                check_date = datetime.now() + timedelta(days=day_offset)
+                
+                # Skip past times for today
+                start_hour = max(preferred_hours[0], datetime.now().hour + 1) if day_offset == 0 else preferred_hours[0]
+                
+                for hour in preferred_hours:
+                    if hour < start_hour:
+                        continue
+                    
+                    proposed_time = check_date.replace(hour=hour, minute=0, second=0, microsecond=0)
+                    
+                    # Check for conflicts
+                    conflict_check = await self.check_conflicts(proposed_time, duration_minutes)
+                    
+                    if not conflict_check["has_conflicts"]:
+                        logger.info(f"✅ Found free time: {proposed_time.strftime('%A, %B %d at %I:%M %p')}")
+                        return proposed_time
+            
+            logger.warning(f"⚠️ No free time found in next {days_ahead} days")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Error finding free time: {e}")
+            return None
+    
     async def delete_event(self, event_id: str) -> bool:
         """Delete Google Calendar event"""
         

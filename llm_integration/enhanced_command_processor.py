@@ -51,20 +51,33 @@ class LLMCommandProcessor:
                         "start_time": {"type": "string", "description": "Start time in ISO format"},
                         "duration_minutes": {"type": "integer", "description": "Duration in minutes", "default": 60},
                         "attendees": {"type": "array", "items": {"type": "string"}, "description": "List of attendee names"},
-                        "description": {"type": "string", "description": "Event description"}
+                        "description": {"type": "string", "description": "Event description"},
+                        "check_conflicts": {"type": "boolean", "description": "Check for conflicts before creating", "default": true}
                     },
                     "required": ["title", "start_time"]
                 }
             },
             {
+                "name": "check_calendar_conflicts",
+                "description": "Check for scheduling conflicts at a specific time before creating events",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "start_time": {"type": "string", "description": "Proposed start time in ISO format"},
+                        "duration_minutes": {"type": "integer", "description": "Duration in minutes", "default": 60}
+                    },
+                    "required": ["start_time"]
+                }
+            },
+            {
                 "name": "find_calendar_free_time",
-                "description": "Find free time slots for scheduling meetings",
+                "description": "Find free time slots for scheduling meetings when conflicts detected",
                 "input_schema": {
                     "type": "object",
                     "properties": {
                         "duration_minutes": {"type": "integer", "description": "Required duration", "default": 60},
-                        "preferred_times": {"type": "array", "items": {"type": "string"}, "description": "Preferred time hints"},
-                        "date_range": {"type": "string", "description": "Date range like 'this week', 'next week'"}
+                        "days_ahead": {"type": "integer", "description": "How many days to look ahead", "default": 7},
+                        "preferred_hours": {"type": "array", "items": {"type": "integer"}, "description": "Preferred hours (24h format)"}
                     },
                     "required": ["duration_minutes"]
                 }
@@ -81,13 +94,13 @@ class LLMCommandProcessor:
                 }
             },
             {
-                "name": "get_strava_recent_activities",
-                "description": "Get recent fitness activities to understand workout schedule",
+                "name": "get_workout_context",
+                "description": "Get fitness context to optimize meeting scheduling around workouts",
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "limit": {"type": "integer", "description": "Number of activities", "default": 5},
-                        "activity_type": {"type": "string", "description": "Filter by type (run, bike, etc.)"}
+                        "proposed_time": {"type": "string", "description": "Proposed meeting time to check against workouts"},
+                        "limit": {"type": "integer", "description": "Number of recent activities to analyze", "default": 7}
                     }
                 }
             }
@@ -160,13 +173,15 @@ You can use these MCP tools to coordinate meetings intelligently:
 
 INSTRUCTIONS:
 1. Parse natural language requests intelligently
-2. **DIRECT ACTION**: When someone asks to schedule something, USE create_calendar_event IMMEDIATELY - don't check availability first!
-3. Be proactive - if someone wants to schedule, create the actual event RIGHT AWAY
-4. Only use find_calendar_free_time if explicitly asked "when are we available?"
+2. **SMART CONFLICT DETECTION**: Before creating events, use check_calendar_conflicts to detect scheduling conflicts
+3. **INTELLIGENT RESPONSE TO CONFLICTS**: 
+   - If conflicts found: Suggest alternative times using find_calendar_free_time
+   - If no conflicts: Create event immediately with create_calendar_event
+4. **WORKOUT-AWARE SCHEDULING**: Use get_workout_context to avoid scheduling meetings too close to intense workouts
 5. Always provide helpful, actionable responses
 6. Format responses for SMS (concise but informative)
 7. **CRITICAL**: When calculating dates, be extremely precise!
-8. **PRIORITY**: Event creation trumps availability checking!
+8. **PRIORITY**: Smart scheduling beats blind event creation!
 
 RESPONSE STYLE:
 - Use emojis appropriately (📅 🕐 👥 🔗 💪)
@@ -181,13 +196,19 @@ SMART COORDINATION:
 - If someone mentions workouts, check get_strava_recent_activities
 - Always create Google Meet links for virtual meetings
 
-EXAMPLES OF DIRECT ACTION:
-✅ "Schedule family dinner tomorrow at 7pm" → IMMEDIATELY use create_calendar_event
-✅ "Plan meeting this weekend" → IMMEDIATELY use create_calendar_event 
-✅ "Family call tonight at 8pm" → IMMEDIATELY use create_calendar_event
-❌ "Schedule dinner tomorrow" → DON'T use find_calendar_free_time first!
+EXAMPLES OF SMART CONFLICT-AWARE SCHEDULING:
+✅ "Schedule family dinner tomorrow at 7pm" → check_calendar_conflicts → IF clear → create_calendar_event
+✅ "Plan meeting this weekend" → check_calendar_conflicts → IF conflict → find_calendar_free_time → suggest alternatives  
+✅ "Family workout session Saturday morning" → get_workout_context → check for recent intense workouts → schedule appropriately
 
-Remember: CREATE FIRST, optimize later! You're helping families coordinate better by understanding both calendars AND fitness patterns!"""
+🎯 WORKFLOW:
+1. Parse scheduling request
+2. Check conflicts: check_calendar_conflicts
+3. If conflicts: find_calendar_free_time + suggest alternatives
+4. If clear: create_calendar_event
+5. Consider workout context when relevant
+
+Remember: SMART SCHEDULING prevents double-booking! You're helping families coordinate better by understanding both calendars AND fitness patterns!"""
 
     def _create_user_prompt(self, message_text: str, team_member) -> str:
         """Create user prompt with SMS context"""
@@ -276,14 +297,17 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
             if tool_name == "create_calendar_event":
                 return await self._tool_create_calendar_event(tool_input, team_member, db, message_text)
             
+            elif tool_name == "check_calendar_conflicts":
+                return await self._tool_check_conflicts(tool_input, team_member, db, message_text)
+            
             elif tool_name == "find_calendar_free_time":
                 return await self._tool_find_free_time(tool_input, team_member, db, message_text)
             
             elif tool_name == "list_upcoming_events":
                 return await self._tool_list_events(tool_input, team_member, db, message_text)
             
-            elif tool_name == "get_strava_recent_activities":
-                return await self._tool_get_strava_activities(tool_input, team_member, message_text)
+            elif tool_name == "get_workout_context":
+                return await self._tool_get_workout_context(tool_input, team_member, message_text)
             
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
@@ -291,6 +315,136 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
         except Exception as e:
             logger.error(f"❌ Error executing tool {tool_name}: {e}")
             return {"error": str(e)}
+    
+    async def _tool_check_conflicts(self, input_data: Dict, team_member, db, message_text: str) -> Dict:
+        """Check for calendar conflicts at proposed time"""
+        
+        try:
+            start_time_str = input_data["start_time"]
+            duration_minutes = input_data.get("duration_minutes", 60)
+            
+            # Parse the proposed time
+            start_time = self._parse_datetime_bulletproof(start_time_str, message_text)
+            
+            if not start_time:
+                return {"error": f"Could not parse time: {start_time_str}"}
+            
+            logger.info(f"🔍 CONFLICT CHECK: {start_time.strftime('%A, %B %d at %I:%M %p')}")
+            
+            # Check for conflicts using calendar client
+            conflict_result = await self.calendar_client.check_conflicts(
+                start_time=start_time,
+                duration_minutes=duration_minutes
+            )
+            
+            if conflict_result["has_conflicts"]:
+                conflicts = conflict_result["conflicts"]
+                conflict_titles = [c["title"] for c in conflicts]
+                
+                logger.warning(f"⚠️ CONFLICTS DETECTED: {', '.join(conflict_titles)}")
+                
+                return {
+                    "has_conflicts": True,
+                    "conflicts": conflicts,
+                    "message": f"Conflict detected with: {', '.join(conflict_titles)}",
+                    "suggested_action": "find_alternative_time"
+                }
+            else:
+                logger.info(f"✅ NO CONFLICTS - time slot available")
+                return {
+                    "has_conflicts": False,
+                    "message": "Time slot is available",
+                    "suggested_action": "create_event"
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Conflict check failed: {str(e)}")
+            return {"error": f"Conflict check failed: {str(e)}"}
+    
+    async def _tool_get_workout_context(self, input_data: Dict, team_member, message_text: str) -> Dict:
+        """Get workout context for smart scheduling"""
+        
+        try:
+            proposed_time_str = input_data.get("proposed_time")
+            limit = input_data.get("limit", 7)
+            
+            # Initialize Strava client if not already done
+            if not self.strava_client:
+                from strava_integrations.strava_client import StravaClient
+                self.strava_client = StravaClient()
+            
+            # Get recent activities
+            activities = await self.strava_client.get_athlete_activities(limit=limit)
+            
+            # Analyze workout patterns
+            analysis = self.strava_client.analyze_workout_patterns(activities)
+            
+            # If proposed time provided, check proximity to workouts
+            proximity_analysis = None
+            if proposed_time_str:
+                try:
+                    proposed_time = self._parse_datetime_bulletproof(proposed_time_str, message_text)
+                    if proposed_time:
+                        proximity_analysis = self._analyze_workout_proximity(activities, proposed_time)
+                except Exception as e:
+                    logger.warning(f"Could not analyze workout proximity: {e}")
+            
+            logger.info(f"💪 WORKOUT CONTEXT: {len(activities)} recent activities analyzed")
+            
+            return {
+                "success": True,
+                "recent_activities_count": len(activities),
+                "workout_patterns": analysis,
+                "proximity_analysis": proximity_analysis,
+                "recommendations": analysis.get("recommendations", []),
+                "optimal_meeting_times": analysis.get("optimal_meeting_times", [])
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Workout context error: {str(e)}")
+            return {"error": f"Workout analysis failed: {str(e)}"}
+    
+    def _analyze_workout_proximity(self, activities: List[Dict], proposed_time: datetime) -> Dict:
+        """Analyze how close proposed meeting is to recent workouts"""
+        
+        if not activities:
+            return {"recommendation": "No recent workout data"}
+        
+        close_workouts = []
+        
+        for activity in activities:
+            try:
+                activity_time = datetime.fromisoformat(activity["start_date"].replace('Z', '+00:00'))
+                time_diff = abs((proposed_time - activity_time).total_seconds() / 3600)  # Hours
+                
+                if time_diff < 24:  # Within 24 hours
+                    intensity = "high" if activity.get("average_heartrate", 0) > 150 else "moderate"
+                    close_workouts.append({
+                        "activity": activity["name"],
+                        "type": activity["type"],
+                        "time_diff_hours": round(time_diff, 1),
+                        "intensity": intensity
+                    })
+                    
+            except Exception as e:
+                logger.warning(f"Error analyzing activity: {e}")
+        
+        if close_workouts:
+            high_intensity_close = any(w["intensity"] == "high" and w["time_diff_hours"] < 2 for w in close_workouts)
+            
+            if high_intensity_close:
+                return {
+                    "warning": "High intensity workout within 2 hours",
+                    "recommendation": "Consider scheduling 2+ hours after intense workouts",
+                    "close_workouts": close_workouts
+                }
+            else:
+                return {
+                    "info": "Recent workouts detected but timing looks good",
+                    "close_workouts": close_workouts
+                }
+        
+        return {"recommendation": "No workout conflicts detected"}
     
     async def _tool_create_calendar_event(self, input_data: Dict, team_member, db, message_text: str) -> Dict:
         """Create calendar event using MCP calendar client"""
@@ -456,70 +610,58 @@ Use the MCP tools as needed and provide a helpful SMS response. If you're schedu
             return {"error": f"Failed to list events: {str(e)}"}
     
     async def _tool_find_free_time(self, input_data: Dict, team_member, db, message_text: str) -> Dict:
-        """Find free time using calendar client"""
+        """Find free time using enhanced calendar client"""
         
         try:
-            from database.models import Team, TeamMember
+            duration_minutes = input_data.get("duration_minutes", 60)
+            days_ahead = input_data.get("days_ahead", 7)
+            preferred_hours = input_data.get("preferred_hours")
             
-            team = db.query(Team).filter(Team.id == team_member.team_id).first()
-            members = db.query(TeamMember).filter(TeamMember.team_id == team.id).all()
+            logger.info(f"🔍 FINDING FREE TIME: {duration_minutes} min slots over {days_ahead} days")
             
-            duration = input_data.get("duration_minutes", 60)
-            
-            # Use calendar client to find free time
-            free_time = await self.calendar_client.find_free_time(
-                attendees=[member.google_calendar_id for member in members if member.google_calendar_id],
-                duration_minutes=duration
+            # Use the enhanced find_free_time method
+            suggested_time = await self.calendar_client.find_free_time(
+                duration_minutes=duration_minutes,
+                days_ahead=days_ahead,
+                preferred_hours=preferred_hours
             )
             
-            if free_time:
+            if suggested_time:
+                logger.info(f"✅ FOUND FREE TIME: {suggested_time.strftime('%A, %B %d at %I:%M %p')}")
+                
+                # Also provide a few alternative times
+                alternatives = []
+                for hour_offset in [1, 2, 24]:  # 1 hour later, 2 hours later, next day same time
+                    alt_time = suggested_time + timedelta(hours=hour_offset)
+                    alt_check = await self.calendar_client.check_conflicts(alt_time, duration_minutes)
+                    if not alt_check["has_conflicts"]:
+                        alternatives.append(alt_time.strftime("%A, %B %d at %I:%M %p"))
+                        if len(alternatives) >= 2:  # Limit to 2 alternatives
+                            break
+                
                 return {
                     "success": True,
-                    "suggested_time": free_time.strftime("%A, %B %d at %I:%M %p"),
-                    "duration_minutes": duration
+                    "suggested_time": suggested_time.strftime("%A, %B %d at %I:%M %p"),
+                    "suggested_time_iso": suggested_time.isoformat(),
+                    "alternatives": alternatives,
+                    "duration_minutes": duration_minutes,
+                    "message": f"Available: {suggested_time.strftime('%A, %B %d at %I:%M %p')}"
                 }
             else:
+                logger.warning(f"⚠️ NO FREE TIME found in {days_ahead} days")
+                
+                # Suggest extending the search
                 return {
                     "success": False,
-                    "message": "No suitable free time found"
+                    "message": f"No {duration_minutes}-minute slots available in next {days_ahead} days",
+                    "suggestion": "Try shorter duration or extend search to next week"
                 }
                 
         except Exception as e:
+            logger.error(f"❌ Free time search failed: {str(e)}")
             return {"error": f"Failed to find free time: {str(e)}"}
     
-    async def _tool_get_strava_activities(self, input_data: Dict, team_member, message_text: str) -> Dict:
-        """Get Strava activities for fitness context"""
-        
-        if not self.strava_client:
-            # Mock Strava data for demonstration
-            return {
-                "success": True,
-                "recent_workouts": [
-                    {"type": "Run", "date": "2025-06-21", "duration": 45, "intensity": "moderate"},
-                    {"type": "Bike", "date": "2025-06-20", "duration": 90, "intensity": "high"},
-                    {"type": "Run", "date": "2025-06-19", "duration": 30, "intensity": "easy"}
-                ],
-                "analysis": {
-                    "high_intensity_days": ["Wednesday", "Saturday"],
-                    "recommendation": "Best meeting times: Thursday afternoon, Friday morning",
-                    "note": "Mock Strava data - real integration available"
-                }
-            }
-        
-        try:
-            # Real Strava integration would go here
-            activities = await self.strava_client.get_athlete_activities(
-                limit=input_data.get("limit", 5)
-            )
-            
-            return {
-                "success": True,
-                "recent_workouts": activities,
-                "analysis": self._analyze_workout_patterns(activities)
-            }
-            
-        except Exception as e:
-            return {"error": f"Failed to get Strava data: {e}"}
+
     
     def _parse_datetime_bulletproof(self, time_str: str, original_message: str) -> Optional[datetime]:
         """
