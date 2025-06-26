@@ -58,7 +58,7 @@ class LLMCommandProcessor:
             },
             {
                 "name": "check_calendar_conflicts",
-                "description": "Check for scheduling conflicts at a specific time before creating events",
+                "description": "Check for scheduling conflicts at a specific time. IMPORTANT: If no conflicts found, you MUST immediately call create_calendar_event next. Do NOT respond to user without creating the event.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -186,6 +186,8 @@ HOW TO BE SMART:
 - Make events that make sense - don't overthink it
 
 BE NATURAL: Respond like a helpful human assistant would via text message. Ask questions when you need clarification. Make reasonable assumptions. Have a conversation!
+
+CRITICAL: If check_calendar_conflicts returns "NEXT_STEP_REQUIRED", you MUST call create_calendar_event immediately. Failure to do so means the user's meeting won't be created and you will have failed them completely.
 
 CORRECT TOOL WORKFLOW EXAMPLES:
 ✅ User: "Schedule lunch tomorrow at noon"
@@ -402,7 +404,9 @@ Remember: You just helped them with "{message_text}" - make sure your response c
                 return {
                     "has_conflicts": False,
                     "message": "Time slot is available",
-                    "suggested_action": "create_event"
+                    "suggested_action": "create_event",
+                    "NEXT_STEP_REQUIRED": "YOU MUST NOW CALL create_calendar_event TO COMPLETE THE USER'S REQUEST",
+                    "WARNING": "DO NOT respond to user without calling create_calendar_event first"
                 }
                 
         except Exception as e:
