@@ -122,6 +122,10 @@ class LLMCommandProcessor:
             
             logger.info(f"🧠 Processing with LLM: {message_text[:50]}...")
             
+            # EXPLICIT DEBUG: Track what tools Claude will use
+            logger.info(f"📋 [TOOL DEBUG] Available tools for Claude: {[tool['name'] for tool in self.available_tools]}")
+            logger.info(f"📋 [TOOL DEBUG] For scheduling requests, Claude should use: check_calendar_conflicts -> create_calendar_event")
+            
             # Call Claude with tool use capability
             response = self.claude_client.messages.create(
                 model="claude-3-5-sonnet-20241022",
@@ -167,10 +171,12 @@ TOOLS AVAILABLE:
 - find_calendar_free_time: Find available time slots
 - list_upcoming_events: See what's coming up
 
-IMPORTANT WORKFLOW:
-1. For scheduling requests: ALWAYS check conflicts first, then CREATE the event if no conflicts
-2. Don't claim you've created an event unless you actually called create_calendar_event
-3. Be honest about what you've actually done vs what you're planning to do
+IMPORTANT WORKFLOW - FOLLOW EXACTLY:
+1. For ANY scheduling request: You MUST call check_calendar_conflicts first
+2. If no conflicts found: You MUST immediately call create_calendar_event 
+3. NEVER claim you created an event unless create_calendar_event was actually called
+4. If you only check conflicts but don't create the event, you have failed the user
+5. Be honest: say "I can check the time is free" vs "I've created the event"
 
 HOW TO BE SMART:
 - If someone says "schedule dinner tomorrow at 7pm" → you can reasonably assume it's a family dinner
@@ -179,7 +185,16 @@ HOW TO BE SMART:
 - If you detect potential conflicts, mention it: "I see you have X at that time, want to try Y instead?"
 - Make events that make sense - don't overthink it
 
-BE NATURAL: Respond like a helpful human assistant would via text message. Ask questions when you need clarification. Make reasonable assumptions. Have a conversation!"""
+BE NATURAL: Respond like a helpful human assistant would via text message. Ask questions when you need clarification. Make reasonable assumptions. Have a conversation!
+
+CORRECT TOOL WORKFLOW EXAMPLES:
+✅ User: "Schedule lunch tomorrow at noon"
+   Step 1: Call check_calendar_conflicts 
+   Step 2: Call create_calendar_event
+   Response: "Lunch meeting created for tomorrow at noon! Here's your calendar link..."
+
+❌ WRONG: Only calling check_calendar_conflicts and claiming event was created
+❌ WRONG: Saying "I've added it to your calendar" without calling create_calendar_event"""
 
     def _create_user_prompt(self, message_text: str, team_member, conversation=None) -> str:
         """Create user prompt with SMS context and conversation history"""
@@ -213,8 +228,10 @@ If you're not sure about something (like who to invite to an event), just ask! B
         final_text = ""
         
         # Process all content blocks
+        tool_calls_made = []
         for content_block in response.content:
             if content_block.type == "tool_use":
+                tool_calls_made.append(content_block.name)
                 # Execute tool
                 tool_name = content_block.name
                 tool_input = content_block.input
@@ -249,6 +266,24 @@ If you're not sure about something (like who to invite to an event), just ask! B
                 
             elif content_block.type == "text":
                 final_text = content_block.text
+        
+        # EXPLICIT DEBUG: Show what tools Claude actually called
+        logger.info(f"📋 [TOOL DEBUG] Tools Claude actually called: {tool_calls_made}")
+        
+        # Check if this was a scheduling request that should have created an event
+        is_scheduling_request = any(word in message_text.lower() for word in ['schedule', 'meeting', 'event', 'lunch', 'dinner', 'call'])
+        if is_scheduling_request:
+            has_conflict_check = 'check_calendar_conflicts' in tool_calls_made
+            has_event_creation = 'create_calendar_event' in tool_calls_made
+            
+            logger.info(f"📋 [SCHEDULING DEBUG] This appears to be a scheduling request: '{message_text}'")
+            logger.info(f"📋 [SCHEDULING DEBUG] Conflict check called: {has_conflict_check}")
+            logger.info(f"📋 [SCHEDULING DEBUG] Event creation called: {has_event_creation}")
+            
+            if has_conflict_check and not has_event_creation:
+                logger.error(f"🚫 [TOOL ERROR] Claude checked conflicts but didn't create event! This is the bug!")
+                logger.error(f"🚫 [TOOL ERROR] Expected: check_calendar_conflicts -> create_calendar_event")
+                logger.error(f"🚫 [TOOL ERROR] Actual: {' -> '.join(tool_calls_made) if tool_calls_made else 'No tools called'}")
         
         # If tools were used, get Claude's final response based on results
         if tool_results:
