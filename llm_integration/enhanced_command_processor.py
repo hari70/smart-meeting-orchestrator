@@ -52,7 +52,7 @@ class LLMCommandProcessor:
                         "duration_minutes": {"type": "integer", "description": "Duration in minutes", "default": 60},
                         "attendees": {"type": "array", "items": {"type": "string"}, "description": "List of attendee names"},
                         "description": {"type": "string", "description": "Event description"},
-                        "check_conflicts": {"type": "boolean", "description": "Check for conflicts before creating", "default": true}
+                        "check_conflicts": {"type": "boolean", "description": "Check for conflicts before creating", "default": True}
                     },
                     "required": ["title", "start_time"]
                 }
