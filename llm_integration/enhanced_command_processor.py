@@ -284,62 +284,6 @@ For finding free time: use find_calendar_free_time
 IMPORTANT: Complete all necessary tool calls before responding to the user. Don't ask for permission to use tools - just use them."""
         
         return base_prompt
-    
-    async def _basic_command_processing(self, message_text: str, team_member, conversation, db) -> str:
-        """Simple fallback command processing when LLM not available"""
-        try:
-            message_lower = message_text.lower().strip()
-            
-            # Check conversation context for pending meetings
-            pending_meeting = None
-            if conversation and conversation.context:
-                recent_messages = conversation.context.get("recent_messages", [])
-                last_intent = conversation.context.get("last_intent", "")
-                
-                # Look for previous scheduling attempts
-                for msg in recent_messages[-3:]:  # Check last 3 messages
-                    msg_text = msg.get("message", "").lower()
-                    if any(word in msg_text for word in ['schedule', 'meeting']) and any(word in msg_text for word in ['tomorrow', 'today']):
-                        pending_meeting = msg.get("message", "")
-                        break
-            
-            # Handle confirmation/follow-up messages
-            if any(word in message_lower for word in ['go ahead', 'yes', 'yeah', 'ok', 'okay', 'sure', 'sounds good']) and pending_meeting:
-                return f"✅ Great! I'll schedule that meeting: '{pending_meeting}'. (Note: LLM unavailable - please contact admin to enable full scheduling)"
-            
-            # Handle time specifications if there's a pending meeting context
-            if pending_meeting and any(word in message_lower for word in ['am', 'pm', 'tomorrow', 'today']) and any(char.isdigit() for char in message_text):
-                return f"✅ Perfect! Meeting time confirmed for {message_text}. (Note: LLM unavailable - please contact admin to enable full calendar integration)"
-            
-            # Original pattern matching for initial scheduling requests
-            if any(word in message_lower for word in ['schedule', 'meeting', 'event']) and not any(word in message_lower for word in ['list', 'show', 'cancel']):
-                if 'tomorrow' in message_lower:
-                    return "✅ I'd help you schedule that meeting for tomorrow! (LLM unavailable - using fallback)"
-                elif any(day in message_lower for day in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']):
-                    return "✅ I'd help you schedule that meeting! (LLM unavailable - using fallback)"
-                else:
-                    return "I can help you schedule a meeting. When would you like it? (LLM unavailable)"
-            
-            elif any(word in message_lower for word in ['list', 'show']) and any(word in message_lower for word in ['meetings', 'agenda', 'meeting']):
-                return "📅 Here are your upcoming meetings: (No meetings found - LLM unavailable)"
-            
-            elif any(word in message_lower for word in ['cancel', 'delete', 'remove']):
-                return "I can help you cancel a meeting. (LLM unavailable - please try again later)"
-            
-            elif any(word in message_lower for word in ['help', 'what', 'how', 'commands']):
-                return """🤖 I can help you with:
-• "Schedule meeting tomorrow at 2pm"
-• "List my meetings"  
-• "Cancel today's meeting"
-
-(LLM unavailable - using basic responses)"""
-            
-            else:
-                return "I'm here to help with meeting coordination! Try: 'Schedule meeting tomorrow at 3pm' (LLM unavailable)"
-                
-        except Exception as e:
-            logger.error(f"❌ Basic command processing error: {e}")
-            return "Sorry, I'm having trouble processing your request. Please try again later."
 
     async def _process_llm_response(self, response, team_member, db, message_text: str) -> str:
         """Process Claude's response and execute any tool calls"""
@@ -483,58 +427,58 @@ Remember: You just helped them with "{message_text}" - make sure your response c
             return {"error": str(e)}
     
     async def _store_pending_confirmation(self, team_member, original_message: str, tool_results: list, db):
-    """Store pending confirmation state in conversation context."""
-    try:
-        from database.models import Conversation
-            
-        conversation = db.query(Conversation).filter(
-            Conversation.phone_number == team_member.phone
-        ).first()
-            
-        if conversation:
-            if not conversation.context:
-                conversation.context = {}
+        """Store pending confirmation state in conversation context."""
+        try:
+            from database.models import Conversation
                 
-            # Store pending confirmation details
-            conversation.context["pending_confirmation"] = {
-                "type": "tool_execution_confirmation",
-                "original_request": original_message,
-                "tool_results": tool_results,
-                "timestamp": datetime.utcnow().isoformat(),
-                "awaiting_response": True
-            }
+            conversation = db.query(Conversation).filter(
+                Conversation.phone_number == team_member.phone
+            ).first()
                 
-            db.commit()
-            logger.info(f"⏳ [PENDING] Stored pending confirmation for {team_member.name}")
-    except Exception as e:
-        logger.error(f"⚠️ [PENDING] Failed to store pending confirmation: {e}")
+            if conversation:
+                if not conversation.context:
+                    conversation.context = {}
+                    
+                # Store pending confirmation details
+                conversation.context["pending_confirmation"] = {
+                    "type": "tool_execution_confirmation",
+                    "original_request": original_message,
+                    "tool_results": tool_results,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "awaiting_response": True
+                }
+                    
+                db.commit()
+                logger.info(f"⏳ [PENDING] Stored pending confirmation for {team_member.name}")
+        except Exception as e:
+            logger.error(f"⚠️ [PENDING] Failed to store pending confirmation: {e}")
     
     async def _store_pending_question(self, team_member, original_message: str, question_response: str, db):
-    """Store pending question state in conversation context."""
-    try:
-        from database.models import Conversation
-            
-        conversation = db.query(Conversation).filter(
-            Conversation.phone_number == team_member.phone
-        ).first()
-            
-        if conversation:
-            if not conversation.context:
-                conversation.context = {}
+        """Store pending question state in conversation context."""
+        try:
+            from database.models import Conversation
                 
-            # Store pending question details
-            conversation.context["pending_confirmation"] = {
-                "type": "clarification_question",
-                "original_request": original_message,
-                "question_asked": question_response,
-                "timestamp": datetime.utcnow().isoformat(),
-                "awaiting_response": True
-            }
+            conversation = db.query(Conversation).filter(
+                Conversation.phone_number == team_member.phone
+            ).first()
                 
-            db.commit()
-            logger.info(f"❓ [PENDING] Stored pending question for {team_member.name}")
-    except Exception as e:
-        logger.error(f"⚠️ [PENDING] Failed to store pending question: {e}")
+            if conversation:
+                if not conversation.context:
+                    conversation.context = {}
+                    
+                # Store pending question details
+                conversation.context["pending_confirmation"] = {
+                    "type": "clarification_question",
+                    "original_request": original_message,
+                    "question_asked": question_response,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "awaiting_response": True
+                }
+                    
+                db.commit()
+                logger.info(f"❓ [PENDING] Stored pending question for {team_member.name}")
+        except Exception as e:
+            logger.error(f"⚠️ [PENDING] Failed to store pending question: {e}")
     
     async def _tool_check_conflicts(self, input_data: Dict, team_member, db, message_text: str) -> Dict:
         """Check for calendar conflicts at proposed time - SAFE VERSION"""
