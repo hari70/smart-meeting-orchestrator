@@ -111,6 +111,61 @@ async def test_create_calendar_event(request: Request):
         }
 
 
+@router.post("/test/llm-response")
+async def test_llm_response(request: Request, db: Session = Depends(get_db)):
+    """Test endpoint to see what the LLM actually responds with (without sending SMS)."""
+    try:
+        data = await request.json()
+        message = data.get("message", "schedule a meeting tomorrow at 2pm")
+        phone = data.get("phone", "+12345678901")
+        
+        # Simulate the same flow as webhook but return the response
+        conversation = db.query(Conversation).filter(Conversation.phone_number == phone).first()
+        if not conversation:
+            conversation = Conversation(phone_number=phone, context={}, last_activity=datetime.now())
+            db.add(conversation)
+            db.commit()
+            db.refresh(conversation)
+        
+        # Get or create a test member
+        member = db.query(TeamMember).filter(TeamMember.phone == phone).first()
+        if not member:
+            team = db.query(Team).filter(Team.name == "Family").first()
+            if not team:
+                team = Team(name="Family")
+                db.add(team)
+                db.commit()
+                db.refresh(team)
+            member = TeamMember(team_id=team.id, name="Test User", phone=phone, is_admin=True)
+            db.add(member)
+            db.commit()
+            db.refresh(member)
+        
+        # Process with LLM and return the actual response
+        llm_response = await services.command_processor.process_command_with_llm(
+            message_text=message,
+            team_member=member,
+            conversation=conversation,
+            db=db
+        )
+        
+        return {
+            "success": True,
+            "input_message": message,
+            "llm_response": llm_response,
+            "llm_enabled": getattr(services.command_processor, 'llm_enabled', False),
+            "response_length": len(llm_response) if llm_response else 0
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error testing LLM response: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "llm_enabled": getattr(services.command_processor, 'llm_enabled', False)
+        }
+
+
 @router.get("/test/environment-check")
 async def test_environment_check():
     """Public endpoint to check critical environment variables (masked for security)."""
