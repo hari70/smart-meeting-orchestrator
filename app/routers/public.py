@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 import logging
 
 from database.connection import get_db
-from database.models import Team, TeamMember, Meeting
+from database.models import Team, TeamMember, Meeting, Conversation
 from app import services
 
 router = APIRouter()
