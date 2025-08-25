@@ -191,6 +191,73 @@ async def test_environment_check():
     }
 
 
+@router.post("/test/llm-tools-debug")
+async def test_llm_tools_debug(request: Request):
+    """Test Claude tool calling specifically to isolate the issue."""
+    import traceback
+    import os
+    
+    try:
+        data = await request.json()
+        message = data.get("message", "Schedule a meeting tomorrow at 2pm")
+        
+        # Import and setup
+        import anthropic
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        client = anthropic.Anthropic(api_key=api_key)
+        
+        # Define a simple tool for testing
+        test_tools = [
+            {
+                "name": "test_tool",
+                "description": "A simple test tool",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string", "description": "Test message"}
+                    },
+                    "required": ["message"]
+                }
+            }
+        ]
+        
+        # Test with tools
+        try:
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=200,
+                messages=[{"role": "user", "content": message}],
+                tools=test_tools
+            )
+            
+            result = {
+                "success": True,
+                "tool_calling_works": True,
+                "response_blocks": len(response.content),
+                "content_types": [type(block).__name__ for block in response.content],
+                "has_tool_use": any(hasattr(block, 'name') for block in response.content),
+                "response_preview": str(response.content[0])[:200] if response.content else "No content"
+            }
+            
+            return result
+            
+        except Exception as tool_error:
+            return {
+                "success": False,
+                "tool_calling_works": False,
+                "error_in_tool_call": str(tool_error),
+                "error_type": type(tool_error).__name__,
+                "traceback": traceback.format_exc()
+            }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+
 @router.post("/test/llm-debug")
 async def test_llm_debug(request: Request):
     """Detailed LLM debugging endpoint to catch specific errors."""
