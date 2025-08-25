@@ -114,6 +114,8 @@ async def test_create_calendar_event(request: Request):
 @router.post("/test/llm-response")
 async def test_llm_response(request: Request, db: Session = Depends(get_db)):
     """Test endpoint to see what the LLM actually responds with (without sending SMS)."""
+    import traceback
+    
     try:
         data = await request.json()
         message = data.get("message", "schedule a meeting tomorrow at 2pm")
@@ -142,12 +144,32 @@ async def test_llm_response(request: Request, db: Session = Depends(get_db)):
             db.refresh(member)
         
         # Process with LLM and return the actual response
-        llm_response = await services.command_processor.process_command_with_llm(
-            message_text=message,
-            team_member=member,
-            conversation=conversation,
-            db=db
-        )
+        try:
+            logger.info(f"🧠 [TEST] About to call LLM processor with message: {message}")
+            logger.info(f"👤 [TEST] Team member: {member.name} (phone: {member.phone})")
+            logger.info(f"🏢 [TEST] Team ID: {member.team_id}")
+            
+            llm_response = await services.command_processor.process_command_with_llm(
+                message_text=message,
+                team_member=member,
+                conversation=conversation,
+                db=db
+            )
+            
+            logger.info(f"🤖 [TEST] LLM response received: {llm_response[:100]}...")
+            
+        except Exception as llm_error:
+            logger.error(f"❌ [TEST] LLM processing exception: {llm_error}")
+            logger.error(f"❌ [TEST] Exception type: {type(llm_error).__name__}")
+            logger.error(f"❌ [TEST] Traceback:\n{traceback.format_exc()}")
+            
+            return {
+                "success": False,
+                "error": str(llm_error),
+                "error_type": type(llm_error).__name__,
+                "traceback": traceback.format_exc(),
+                "llm_enabled": getattr(services.command_processor, 'llm_enabled', False)
+            }
         
         return {
             "success": True,
@@ -159,9 +181,12 @@ async def test_llm_response(request: Request, db: Session = Depends(get_db)):
         
     except Exception as e:
         logger.error(f"❌ Error testing LLM response: {e}")
+        logger.error(f"❌ Traceback:\n{traceback.format_exc()}")
         return {
             "success": False,
             "error": str(e),
+            "error_type": type(e).__name__,
+            "traceback": traceback.format_exc(),
             "llm_enabled": getattr(services.command_processor, 'llm_enabled', False)
         }
 
