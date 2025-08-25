@@ -366,7 +366,7 @@ IMPORTANT: Complete all necessary tool calls before responding to the user. Don'
             logger.info(f"🎯 Tool execution complete. Getting final response from Claude...")
             
             tool_summary = "\\n".join([
-                f"{result['tool']}: {result['result']}"
+                f"{result['tool']}: {json.dumps(result['result'], default=str)}"
                 for result in tool_results
             ])
             
