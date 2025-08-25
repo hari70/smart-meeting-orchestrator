@@ -256,11 +256,11 @@ CORRECT TOOL WORKFLOW EXAMPLES:
             # Include pending confirmation state
             if "pending_confirmation" in conversation.context:
                 pending = conversation.context["pending_confirmation"]
-                pending_context = f"\n=== PENDING CONFIRMATION ===\n"
-                pending_context += f"Type: {pending.get('type', 'unknown')}\n"
+                pending_context = "\n=== PENDING CONFIRMATION ===\n"
+                pending_context += "Type: " + pending.get('type', 'unknown') + "\n"
                 if "details" in pending:
                     details = pending["details"]
-                    pending_context += f"Details: {json.dumps(details, indent=2)}\n"
+                    pending_context += "Details: " + json.dumps(details, indent=2) + "\n"
                 pending_context += "\nThe user may be responding to this pending item.\n"
                 logger.info(f"⏳ [PENDING] Found pending confirmation: {pending.get('type')}")
             
@@ -270,33 +270,29 @@ CORRECT TOOL WORKFLOW EXAMPLES:
                 conversation_context += f"Last detected intent: {last_intent}\n"
                 logger.info(f"🎯 [INTENT] Previous intent: {last_intent}")
         
-        # Create enhanced prompt with full context
-        base_prompt = f"""CURRENT SMS from {team_member.name}: "{message_text}"{conversation_context}{pending_context}
-
-=== YOUR ROLE ===
-You are their helpful family assistant. You coordinate meetings via SMS and have access to calendar tools.
-
-=== CONTEXT ANALYSIS ===
-Analyze the conversation history above to understand:
-1. What they're trying to accomplish
-2. If this message is a follow-up/response to previous messages
-3. If they're confirming something you asked about
-4. What information is still needed
-
-=== RESPONSE GUIDELINES ===
-• If this continues a previous conversation, acknowledge what was discussed
-• For scheduling: Use check_calendar_conflicts first, then create_calendar_event if clear
-• For confirmations ("yes", "sounds good", etc.), refer to pending items
-• Keep responses concise for SMS (under 160 chars when possible)
-• Be conversational and natural
-• Ask clarifying questions if needed
-
-=== TOOL USAGE ===
-For ANY scheduling request: check_calendar_conflicts → create_calendar_event (both in same response)
-For questions about calendar: use list_upcoming_events
-For finding free time: use find_calendar_free_time
-
-IMPORTANT: Complete all necessary tool calls before responding to the user. Don't ask for permission to use tools - just use them."""
+        # Create enhanced prompt with full context using string concatenation to avoid f-string conflicts
+        base_prompt = ("CURRENT SMS from " + team_member.name + ": \"" + message_text + "\"" + 
+                      conversation_context + pending_context + 
+                      "\n\n=== YOUR ROLE ===\n"
+                      "You are their helpful family assistant. You coordinate meetings via SMS and have access to calendar tools.\n\n"
+                      "=== CONTEXT ANALYSIS ===\n"
+                      "Analyze the conversation history above to understand:\n"
+                      "1. What they're trying to accomplish\n"
+                      "2. If this message is a follow-up/response to previous messages\n"
+                      "3. If they're confirming something you asked about\n"
+                      "4. What information is still needed\n\n"
+                      "=== RESPONSE GUIDELINES ===\n"
+                      "• If this continues a previous conversation, acknowledge what was discussed\n"
+                      "• For scheduling: Use check_calendar_conflicts first, then create_calendar_event if clear\n"
+                      "• For confirmations (\"yes\", \"sounds good\", etc.), refer to pending items\n"
+                      "• Keep responses concise for SMS (under 160 chars when possible)\n"
+                      "• Be conversational and natural\n"
+                      "• Ask clarifying questions if needed\n\n"
+                      "=== TOOL USAGE ===\n"
+                      "For ANY scheduling request: check_calendar_conflicts → create_calendar_event (both in same response)\n"
+                      "For questions about calendar: use list_upcoming_events\n"
+                      "For finding free time: use find_calendar_free_time\n\n"
+                      "IMPORTANT: Complete all necessary tool calls before responding to the user. Don't ask for permission to use tools - just use them.")
         
         return base_prompt
 
@@ -374,19 +370,16 @@ IMPORTANT: Complete all necessary tool calls before responding to the user. Don'
             ])
             
             # 🔥 CONTEXT FIX: Include original message and full context in second Claude call
-            context_prompt = f"""ORIGINAL SMS REQUEST from {team_member.name}: "{message_text}"
-
-TOOL EXECUTION RESULTS:
-{tool_summary}
-
-Please provide a helpful SMS response that:
-1. Acknowledges what they originally asked for
-2. Confirms what was accomplished
-3. Includes relevant details (times, links, etc.)
-4. Keeps it concise for SMS (under 160 chars when possible)
-5. Uses a friendly, conversational tone
-
-Remember: You just helped them with "{message_text}" - make sure your response connects back to their original request!"""
+            # Using string concatenation to avoid f-string format specifier conflicts with JSON content
+            context_prompt = ("ORIGINAL SMS REQUEST from " + team_member.name + ": \"" + message_text + "\""
+                            "\n\nTOOL EXECUTION RESULTS:\n" + tool_summary + 
+                            "\n\nPlease provide a helpful SMS response that:"
+                            "\n1. Acknowledges what they originally asked for"
+                            "\n2. Confirms what was accomplished"
+                            "\n3. Includes relevant details (times, links, etc.)"
+                            "\n4. Keeps it concise for SMS (under 160 chars when possible)"
+                            "\n5. Uses a friendly, conversational tone"
+                            "\n\nRemember: You just helped them with \"" + message_text + "\" - make sure your response connects back to their original request!")
             
             final_response = self.claude_client.messages.create(
                 model="claude-3-5-sonnet-20241022",
