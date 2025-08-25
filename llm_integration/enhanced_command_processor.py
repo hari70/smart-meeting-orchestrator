@@ -482,7 +482,7 @@ Remember: You just helped them with "{message_text}" - make sure your response c
             logger.error(f"❌ Error executing tool {tool_name}: {e}")
             return {"error": str(e)}
     
-async def _store_pending_confirmation(self, team_member, original_message: str, tool_results: list, db):
+    async def _store_pending_confirmation(self, team_member, original_message: str, tool_results: list, db):
     """Store pending confirmation state in conversation context."""
     try:
         from database.models import Conversation
@@ -509,7 +509,7 @@ async def _store_pending_confirmation(self, team_member, original_message: str, 
     except Exception as e:
         logger.error(f"⚠️ [PENDING] Failed to store pending confirmation: {e}")
     
-async def _store_pending_question(self, team_member, original_message: str, question_response: str, db):
+    async def _store_pending_question(self, team_member, original_message: str, question_response: str, db):
     """Store pending question state in conversation context."""
     try:
         from database.models import Conversation
