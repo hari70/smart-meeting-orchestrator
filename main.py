@@ -1,6 +1,7 @@
 """FastAPI application entrypoint (modular, minimal).
 
 All endpoints live in app/routers; shared singletons in app/services.
+Updated: 2024-12-26 - Anthropic SDK v0.64.0 with tool calling support
 """
 
 from fastapi import FastAPI
