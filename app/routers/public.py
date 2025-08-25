@@ -111,6 +111,31 @@ async def test_create_calendar_event(request: Request):
         }
 
 
+@router.get("/test/environment-check")
+async def test_environment_check():
+    """Public endpoint to check critical environment variables (masked for security)."""
+    import os
+    
+    def mask_key(key, show_chars=8):
+        if not key:
+            return "NOT_SET"
+        return key[:show_chars] + "***" + key[-4:] if len(key) > show_chars else "SET_BUT_SHORT"
+    
+    return {
+        "environment_status": {
+            "ANTHROPIC_API_KEY": mask_key(os.getenv("ANTHROPIC_API_KEY")),
+            "SURGE_SMS_API_KEY": mask_key(os.getenv("SURGE_SMS_API_KEY")),
+            "SURGE_ACCOUNT_ID": mask_key(os.getenv("SURGE_ACCOUNT_ID")),
+            "GOOGLE_CALENDAR_ACCESS_TOKEN": mask_key(os.getenv("GOOGLE_CALENDAR_ACCESS_TOKEN")),
+            "GOOGLE_CALENDAR_REFRESH_TOKEN": mask_key(os.getenv("GOOGLE_CALENDAR_REFRESH_TOKEN")),
+            "GOOGLE_CALENDAR_CLIENT_ID": mask_key(os.getenv("GOOGLE_CALENDAR_CLIENT_ID")),
+            "GOOGLE_CALENDAR_CLIENT_SECRET": mask_key(os.getenv("GOOGLE_CALENDAR_CLIENT_SECRET")),
+            "DATABASE_URL": "SET" if os.getenv("DATABASE_URL") else "NOT_SET"
+        },
+        "note": "This shows masked environment variables to help debug integration issues"
+    }
+
+
 @router.get("/test/calendar-status")
 async def test_calendar_status():
     """Public endpoint to check Google Calendar integration status."""
