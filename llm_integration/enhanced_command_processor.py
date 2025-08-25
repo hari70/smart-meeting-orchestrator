@@ -58,7 +58,7 @@ class LLMCommandProcessor:
             },
             {
                 "name": "check_calendar_conflicts",
-                "description": "Check for scheduling conflicts at a specific time. IMPORTANT: If no conflicts found, you MUST immediately call create_calendar_event next. Do NOT respond to user without creating the event.",
+                "description": "Check for scheduling conflicts at a specific time. MANDATORY: When this returns 'ready_to_create: true' or 'has_conflicts: false', you MUST immediately call create_calendar_event in the same response. Never check conflicts without creating the event afterward.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -177,6 +177,18 @@ IMPORTANT WORKFLOW - FOLLOW EXACTLY:
 3. Use multiple tools in sequence - don't stop after just checking conflicts
 4. Tool results are for YOUR decision making, not messages to relay to the user
 5. Only respond to user AFTER you've completed all necessary tool calls
+
+CRITICAL RULE: When check_calendar_conflicts returns "ready_to_create: true" or "suggested_action: create_event", you MUST immediately call create_calendar_event in the same response. DO NOT just respond to the user - create the event first!
+
+EXPLICIT EXAMPLE:
+User: "Schedule meeting tomorrow at 3pm"
+Step 1: Call check_calendar_conflicts
+Result: {"has_conflicts": false, "ready_to_create": true}
+Step 2: MUST call create_calendar_event immediately
+Result: {"success": true, "event_id": "..."}  
+Step 3: Then respond to user: "Meeting scheduled!"
+
+NEVER skip step 2 - always create the event when no conflicts are found!
 
 HOW TO BE SMART:
 - If someone says "schedule dinner tomorrow at 7pm" → you can reasonably assume it's a family dinner
