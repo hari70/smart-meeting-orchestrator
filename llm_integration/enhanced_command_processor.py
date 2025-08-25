@@ -290,7 +290,28 @@ IMPORTANT: Complete all necessary tool calls before responding to the user. Don'
         try:
             message_lower = message_text.lower().strip()
             
-            # Simple pattern matching for basic commands
+            # Check conversation context for pending meetings
+            pending_meeting = None
+            if conversation and conversation.context:
+                recent_messages = conversation.context.get("recent_messages", [])
+                last_intent = conversation.context.get("last_intent", "")
+                
+                # Look for previous scheduling attempts
+                for msg in recent_messages[-3:]:  # Check last 3 messages
+                    msg_text = msg.get("message", "").lower()
+                    if any(word in msg_text for word in ['schedule', 'meeting']) and any(word in msg_text for word in ['tomorrow', 'today']):
+                        pending_meeting = msg.get("message", "")
+                        break
+            
+            # Handle confirmation/follow-up messages
+            if any(word in message_lower for word in ['go ahead', 'yes', 'yeah', 'ok', 'okay', 'sure', 'sounds good']) and pending_meeting:
+                return f"✅ Great! I'll schedule that meeting: '{pending_meeting}'. (Note: LLM unavailable - please contact admin to enable full scheduling)"
+            
+            # Handle time specifications if there's a pending meeting context
+            if pending_meeting and any(word in message_lower for word in ['am', 'pm', 'tomorrow', 'today']) and any(char.isdigit() for char in message_text):
+                return f"✅ Perfect! Meeting time confirmed for {message_text}. (Note: LLM unavailable - please contact admin to enable full calendar integration)"
+            
+            # Original pattern matching for initial scheduling requests
             if any(word in message_lower for word in ['schedule', 'meeting', 'event']) and not any(word in message_lower for word in ['list', 'show', 'cancel']):
                 if 'tomorrow' in message_lower:
                     return "✅ I'd help you schedule that meeting for tomorrow! (LLM unavailable - using fallback)"
@@ -314,7 +335,7 @@ IMPORTANT: Complete all necessary tool calls before responding to the user. Don'
 (LLM unavailable - using basic responses)"""
             
             else:
-                return "I'm here to help with meeting coordination! Try scheduling a meeting. (LLM unavailable)"
+                return "I'm here to help with meeting coordination! Try: 'Schedule meeting tomorrow at 3pm' (LLM unavailable)"
                 
         except Exception as e:
             logger.error(f"❌ Basic command processing error: {e}")
