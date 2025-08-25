@@ -191,6 +191,73 @@ async def test_environment_check():
     }
 
 
+@router.post("/test/llm-debug")
+async def test_llm_debug(request: Request):
+    """Detailed LLM debugging endpoint to catch specific errors."""
+    import traceback
+    import os
+    
+    try:
+        data = await request.json()
+        message = data.get("message", "test message")
+        
+        # Test Anthropic SDK step by step
+        debug_info = {
+            "step_1_env_var": bool(os.getenv("ANTHROPIC_API_KEY")),
+            "step_2_import": False,
+            "step_3_client_init": False,
+            "step_4_api_call": False,
+            "error_details": None,
+            "anthropic_version": None
+        }
+        
+        # Step 1: Check environment
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        debug_info["api_key_format"] = f"{api_key[:15]}...{api_key[-4:]}" if api_key else None
+        
+        # Step 2: Test import
+        try:
+            import anthropic
+            debug_info["step_2_import"] = True
+            debug_info["anthropic_version"] = getattr(anthropic, '__version__', 'unknown')
+        except Exception as e:
+            debug_info["error_details"] = f"Import error: {str(e)}"
+            return debug_info
+        
+        # Step 3: Test client initialization
+        try:
+            client = anthropic.Anthropic(api_key=api_key)
+            debug_info["step_3_client_init"] = True
+        except Exception as e:
+            debug_info["error_details"] = f"Client init error: {str(e)}"
+            return debug_info
+        
+        # Step 4: Test API call
+        try:
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=50,
+                messages=[{"role": "user", "content": message}]
+            )
+            debug_info["step_4_api_call"] = True
+            debug_info["api_response"] = response.content[0].text if response.content else "Empty response"
+        except Exception as e:
+            debug_info["error_details"] = f"API call error: {str(e)}"
+            debug_info["error_type"] = type(e).__name__
+            debug_info["traceback"] = traceback.format_exc()
+            return debug_info
+        
+        debug_info["success"] = True
+        return debug_info
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+
 @router.get("/test/calendar-status")
 async def test_calendar_status():
     """Public endpoint to check Google Calendar integration status."""
