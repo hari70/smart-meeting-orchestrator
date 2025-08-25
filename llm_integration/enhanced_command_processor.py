@@ -249,7 +249,7 @@ CORRECT TOOL WORKFLOW EXAMPLES:
                         except:
                             time_desc = "recently"
                         
-                        conversation_context += f"  [{time_desc}] {team_member.name}: \"{message_content}\"\n"
+                        conversation_context += "  [" + time_desc + "] " + team_member.name + ": \"" + message_content + "\"\n"
                     conversation_context += "\n"
                     logger.info(f"📚 [CONTEXT] Including {len(history_messages)} previous messages")
             
@@ -267,7 +267,7 @@ CORRECT TOOL WORKFLOW EXAMPLES:
             # Include last detected intent
             if "last_intent" in conversation.context:
                 last_intent = conversation.context["last_intent"]
-                conversation_context += f"Last detected intent: {last_intent}\n"
+                conversation_context += "Last detected intent: " + last_intent + "\n"
                 logger.info(f"🎯 [INTENT] Previous intent: {last_intent}")
         
         # Create enhanced prompt with full context using string concatenation to avoid f-string conflicts
