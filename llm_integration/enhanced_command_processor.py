@@ -58,7 +58,7 @@ class LLMCommandProcessor:
             },
             {
                 "name": "check_calendar_conflicts",
-                "description": "Check for scheduling conflicts at a specific time. MANDATORY: When this returns 'ready_to_create: true' or 'has_conflicts: false', you MUST immediately call create_calendar_event in the same response. Never check conflicts without creating the event afterward.",
+                "description": "Check for scheduling conflicts at a specific time. CRITICAL: This tool ONLY checks conflicts - it does NOT create events. After calling this tool, you MUST IMMEDIATELY call create_calendar_event in the EXACT SAME response if no conflicts are found. NEVER end your response after only checking conflicts. The workflow is: check_calendar_conflicts -> create_calendar_event (both in same response).",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -348,6 +348,44 @@ class LLMCommandProcessor:
                 logger.error(f"🚫 [TOOL ERROR] Claude checked conflicts but didn't create event! This is the bug!")
                 logger.error(f"🚫 [TOOL ERROR] Expected: check_calendar_conflicts -> create_calendar_event")
                 logger.error(f"🚫 [TOOL ERROR] Actual: {' -> '.join(tool_calls_made) if tool_calls_made else 'No tools called'}")
+                
+                # 🔧 RUNTIME WORKFLOW ENFORCEMENT: Force event creation when Claude misses it
+                logger.warning(f"🔧 [WORKFLOW ENFORCEMENT] Automatically forcing event creation...")
+                
+                # Find the conflict check result to get the time details
+                conflict_result = None
+                for result in tool_results:
+                    if result['tool'] == 'check_calendar_conflicts':
+                        conflict_result = result['result']
+                        break
+                
+                if conflict_result and not conflict_result.get('has_conflicts', True):
+                    # Extract timing info from the original conflict check
+                    last_conflict_input = None
+                    for result in tool_results:
+                        if result['tool'] == 'check_calendar_conflicts':
+                            last_conflict_input = result['input']
+                            break
+                    
+                    if last_conflict_input:
+                        # Force create the event with the same timing
+                        forced_event_input = {
+                            "title": f"Meeting for {message_text[:30]}...",  # Extract from message
+                            "start_time": last_conflict_input['start_time'],
+                            "duration_minutes": last_conflict_input.get('duration_minutes', 60),
+                            "description": f"Auto-created from: {message_text}"
+                        }
+                        
+                        logger.info(f"🔧 [FORCED CREATION] Creating event with: {json.dumps(forced_event_input, indent=2)}")
+                        
+                        forced_result = await self._execute_mcp_tool("create_calendar_event", forced_event_input, team_member, db, message_text)
+                        tool_results.append({
+                            "tool": "create_calendar_event",
+                            "input": forced_event_input,
+                            "result": forced_result
+                        })
+                        
+                        logger.info(f"✅ [FORCED CREATION] Event creation forced successfully: {forced_result.get('success', False)}")
         
         # If tools were used, get Claude's final response based on results
         if tool_results:
