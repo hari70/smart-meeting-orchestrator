@@ -143,6 +143,9 @@ class LLMCommandProcessor:
             
         except Exception as e:
             logger.error(f"❌ LLM processing error: {e}")
+            logger.error(f"❌ Error type: {type(e).__name__}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
             return await self._basic_command_processing(message_text, team_member, conversation, db)
     
     def _create_system_prompt(self, team_member, team_context: Dict) -> str:
