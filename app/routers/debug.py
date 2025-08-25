@@ -97,3 +97,48 @@ async def calendar_status():
         "mode_hint": "real_google_api" if c.enabled else "mock",
         "how_to_get_real": "Set GOOGLE_CALENDAR_ACCESS_TOKEN or refresh trio then restart process",
     }
+
+
+@router.post("/test-calendar-event")
+async def test_calendar_event(request: Request):
+    """Test creating a calendar event to verify Google Calendar integration."""
+    try:
+        data = await request.json()
+        title = data.get("title", "Test Event from Smart Meeting Orchestrator")
+        hours_from_now = data.get("hours_from_now", 2)
+        duration_minutes = data.get("duration_minutes", 60)
+        
+        # Calculate start time
+        start_time = datetime.now() + timedelta(hours=hours_from_now)
+        
+        # Create calendar event
+        result = await services.calendar_client.create_event(
+            title=title,
+            start_time=start_time,
+            duration_minutes=duration_minutes,
+            attendees=None,
+            meet_link=None
+        )
+        
+        if result:
+            logger.info(f"✅ Test calendar event created: {result}")
+            return {
+                "success": True,
+                "message": "Calendar event created successfully!",
+                "event": result,
+                "integration_status": "real_google_api" if result.get("source") != "mock" else "mock_mode"
+            }
+        else:
+            return {
+                "success": False,
+                "message": "Failed to create calendar event",
+                "integration_status": "failed"
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error testing calendar event: {e}")
+        return {
+            "success": False,
+            "message": f"Error: {str(e)}",
+            "integration_status": "error"
+        }
