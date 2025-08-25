@@ -202,30 +202,123 @@ CORRECT TOOL WORKFLOW EXAMPLES:
     def _create_user_prompt(self, message_text: str, team_member, conversation=None) -> str:
         """Create user prompt with SMS context and conversation history"""
         
-        # Build conversation history if available
-        conversation_history = ""
-        if conversation and conversation.context and conversation.context.get("recent_messages"):
-            recent_messages = conversation.context["recent_messages"]
-            if len(recent_messages) > 1:  # More than just current message
-                conversation_history = "\n\nRECENT CONVERSATION HISTORY:\n"
-                for i, msg in enumerate(recent_messages[:-1]):  # Exclude current message
-                    timestamp = msg.get("timestamp", "")
-                    message_content = msg.get("message", "")
-                    conversation_history += f"Previous message {i+1}: \"{message_content}\"\n"
-                conversation_history += "\n"
-                logger.info(f"📚 [CONVERSATION CONTEXT] Including {len(recent_messages)-1} previous messages")
+        # Build comprehensive conversation history
+        conversation_context = ""
+        pending_context = ""
         
-        base_prompt = f"""SMS from {team_member.name}: "{message_text}"{conversation_history}
+        if conversation and conversation.context:
+            # Include recent message history
+            recent_messages = conversation.context.get("recent_messages", [])
+            if recent_messages:
+                conversation_context = "\n\n=== CONVERSATION HISTORY ==="
+                # Show last 4 messages (excluding current one)
+                history_messages = recent_messages[:-1] if len(recent_messages) > 1 else []
+                
+                if history_messages:
+                    conversation_context += "\nRecent conversation context:\n"
+                    for i, msg in enumerate(history_messages[-4:]):  # Last 4 messages
+                        timestamp = msg.get("timestamp", "")
+                        message_content = msg.get("message", "")
+                        # Parse timestamp for relative time
+                        try:
+                            from datetime import datetime
+                            msg_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            time_ago = datetime.utcnow() - msg_time.replace(tzinfo=None)
+                            if time_ago.total_seconds() < 300:  # Less than 5 minutes
+                                time_desc = "just now"
+                            elif time_ago.total_seconds() < 3600:  # Less than 1 hour
+                                mins = int(time_ago.total_seconds() / 60)
+                                time_desc = f"{mins} min ago"
+                            else:
+                                time_desc = msg_time.strftime("%I:%M %p")
+                        except:
+                            time_desc = "recently"
+                        
+                        conversation_context += f"  [{time_desc}] {team_member.name}: \"{message_content}\"\n"
+                    conversation_context += "\n"
+                    logger.info(f"📚 [CONTEXT] Including {len(history_messages)} previous messages")
+            
+            # Include pending confirmation state
+            if "pending_confirmation" in conversation.context:
+                pending = conversation.context["pending_confirmation"]
+                pending_context = f"\n=== PENDING CONFIRMATION ===\n"
+                pending_context += f"Type: {pending.get('type', 'unknown')}\n"
+                if "details" in pending:
+                    details = pending["details"]
+                    pending_context += f"Details: {json.dumps(details, indent=2)}\n"
+                pending_context += "\nThe user may be responding to this pending item.\n"
+                logger.info(f"⏳ [PENDING] Found pending confirmation: {pending.get('type')}")
+            
+            # Include last detected intent
+            if "last_intent" in conversation.context:
+                last_intent = conversation.context["last_intent"]
+                conversation_context += f"Last detected intent: {last_intent}\n"
+                logger.info(f"🎯 [INTENT] Previous intent: {last_intent}")
+        
+        # Create enhanced prompt with full context
+        base_prompt = f"""CURRENT SMS from {team_member.name}: "{message_text}"{conversation_context}{pending_context}
 
-Please respond naturally as their helpful family assistant. Use the available calendar tools when appropriate to help them schedule things, check availability, or answer questions about their calendar.
+=== YOUR ROLE ===
+You are their helpful family assistant. You coordinate meetings via SMS and have access to calendar tools.
 
-For scheduling requests: Use check_calendar_conflicts first, then create_calendar_event if no conflicts (both in same response). Complete all necessary tool calls before responding to the user.
+=== CONTEXT ANALYSIS ===
+Analyze the conversation history above to understand:
+1. What they're trying to accomplish
+2. If this message is a follow-up/response to previous messages
+3. If they're confirming something you asked about
+4. What information is still needed
 
-IMPORTANT: If this appears to be a response to a previous conversation (like "Yes", "No", "Sounds good"), refer to the conversation history above to understand what they're responding to.
+=== RESPONSE GUIDELINES ===
+• If this continues a previous conversation, acknowledge what was discussed
+• For scheduling: Use check_calendar_conflicts first, then create_calendar_event if clear
+• For confirmations ("yes", "sounds good", etc.), refer to pending items
+• Keep responses concise for SMS (under 160 chars when possible)
+• Be conversational and natural
+• Ask clarifying questions if needed
 
-If you're not sure about something (like who to invite to an event), just ask! Be conversational and helpful."""
+=== TOOL USAGE ===
+For ANY scheduling request: check_calendar_conflicts → create_calendar_event (both in same response)
+For questions about calendar: use list_upcoming_events
+For finding free time: use find_calendar_free_time
+
+IMPORTANT: Complete all necessary tool calls before responding to the user. Don't ask for permission to use tools - just use them."""
         
         return base_prompt
+    
+    async def _basic_command_processing(self, message_text: str, team_member, conversation, db) -> str:
+        """Simple fallback command processing when LLM not available"""
+        try:
+            message_lower = message_text.lower().strip()
+            
+            # Simple pattern matching for basic commands
+            if any(word in message_lower for word in ['schedule', 'meeting', 'event']) and not any(word in message_lower for word in ['list', 'show', 'cancel']):
+                if 'tomorrow' in message_lower:
+                    return "✅ I'd help you schedule that meeting for tomorrow! (LLM unavailable - using fallback)"
+                elif any(day in message_lower for day in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']):
+                    return "✅ I'd help you schedule that meeting! (LLM unavailable - using fallback)"
+                else:
+                    return "I can help you schedule a meeting. When would you like it? (LLM unavailable)"
+            
+            elif any(word in message_lower for word in ['list', 'show']) and any(word in message_lower for word in ['meetings', 'agenda', 'meeting']):
+                return "📅 Here are your upcoming meetings: (No meetings found - LLM unavailable)"
+            
+            elif any(word in message_lower for word in ['cancel', 'delete', 'remove']):
+                return "I can help you cancel a meeting. (LLM unavailable - please try again later)"
+            
+            elif any(word in message_lower for word in ['help', 'what', 'how', 'commands']):
+                return """🤖 I can help you with:
+• "Schedule meeting tomorrow at 2pm"
+• "List my meetings"  
+• "Cancel today's meeting"
+
+(LLM unavailable - using basic responses)"""
+            
+            else:
+                return "I'm here to help with meeting coordination! Try scheduling a meeting. (LLM unavailable)"
+                
+        except Exception as e:
+            logger.error(f"❌ Basic command processing error: {e}")
+            return "Sorry, I'm having trouble processing your request. Please try again later."
 
     async def _process_llm_response(self, response, team_member, db, message_text: str) -> str:
         """Process Claude's response and execute any tool calls"""
@@ -324,11 +417,23 @@ Remember: You just helped them with "{message_text}" - make sure your response c
                 ]
             )
             
-            return final_response.content[0].text
+            response_text = final_response.content[0].text
+            
+            # Store context for follow-up if response asks for confirmation
+            if any(phrase in response_text.lower() for phrase in ['confirm', 'should i', 'would you like', 'ok?', 'sound good']):
+                await self._store_pending_confirmation(team_member, message_text, tool_results, db)
+            
+            return response_text
         
         else:
             # Claude responded directly without tools
-            return final_text if final_text else "I'm here to help! Try asking me to schedule a meeting or check your calendar."
+            response_text = final_text if final_text else "I'm here to help! Try asking me to schedule a meeting or check your calendar."
+            
+            # Check if Claude is asking for more information - store as pending
+            if any(phrase in response_text.lower() for phrase in ['when', 'what time', 'who should', 'which']):
+                await self._store_pending_question(team_member, message_text, response_text, db)
+            
+            return response_text
     
     async def _execute_mcp_tool(self, tool_name: str, tool_input: Dict, team_member, db, message_text: str) -> Dict:
         """Execute specific MCP tool and return results"""
@@ -355,6 +460,60 @@ Remember: You just helped them with "{message_text}" - make sure your response c
         except Exception as e:
             logger.error(f"❌ Error executing tool {tool_name}: {e}")
             return {"error": str(e)}
+    
+async def _store_pending_confirmation(self, team_member, original_message: str, tool_results: list, db):
+    """Store pending confirmation state in conversation context."""
+    try:
+        from database.models import Conversation
+            
+        conversation = db.query(Conversation).filter(
+            Conversation.phone_number == team_member.phone
+        ).first()
+            
+        if conversation:
+            if not conversation.context:
+                conversation.context = {}
+                
+            # Store pending confirmation details
+            conversation.context["pending_confirmation"] = {
+                "type": "tool_execution_confirmation",
+                "original_request": original_message,
+                "tool_results": tool_results,
+                "timestamp": datetime.utcnow().isoformat(),
+                "awaiting_response": True
+            }
+                
+            db.commit()
+            logger.info(f"⏳ [PENDING] Stored pending confirmation for {team_member.name}")
+    except Exception as e:
+        logger.error(f"⚠️ [PENDING] Failed to store pending confirmation: {e}")
+    
+async def _store_pending_question(self, team_member, original_message: str, question_response: str, db):
+    """Store pending question state in conversation context."""
+    try:
+        from database.models import Conversation
+            
+        conversation = db.query(Conversation).filter(
+            Conversation.phone_number == team_member.phone
+        ).first()
+            
+        if conversation:
+            if not conversation.context:
+                conversation.context = {}
+                
+            # Store pending question details
+            conversation.context["pending_confirmation"] = {
+                "type": "clarification_question",
+                "original_request": original_message,
+                "question_asked": question_response,
+                "timestamp": datetime.utcnow().isoformat(),
+                "awaiting_response": True
+            }
+                
+            db.commit()
+            logger.info(f"❓ [PENDING] Stored pending question for {team_member.name}")
+    except Exception as e:
+        logger.error(f"⚠️ [PENDING] Failed to store pending question: {e}")
     
     async def _tool_check_conflicts(self, input_data: Dict, team_member, db, message_text: str) -> Dict:
         """Check for calendar conflicts at proposed time - SAFE VERSION"""
@@ -968,16 +1127,36 @@ Remember: You just helped them with "{message_text}" - make sure your response c
         }
     
     async def _basic_command_processing(self, message_text: str, team_member, conversation, db) -> str:
-        """Fallback to basic processing when LLM not available"""
-        
-        from sms_coordinator.command_processor import CommandProcessor
-        
-        # Use your existing command processor as fallback
-        basic_processor = CommandProcessor(self.sms_client, self.calendar_client, self.meet_client)
-        
-        return await basic_processor.process_command(
-            message_text=message_text,
-            team_member=team_member,
-            conversation=conversation,
-            db=db
-        )
+        """Simple fallback command processing when LLM not available"""
+        try:
+            message_lower = message_text.lower().strip()
+            
+            # Simple pattern matching for basic commands
+            if any(word in message_lower for word in ['schedule', 'meeting', 'event']):
+                if 'tomorrow' in message_lower:
+                    return "I'd help you schedule that meeting for tomorrow! (LLM processing unavailable - using basic response)"
+                elif any(day in message_lower for day in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']):
+                    return "I'd help you schedule that meeting! (LLM processing unavailable - using basic response)"
+                else:
+                    return "I can help you schedule a meeting. When would you like it? (LLM processing unavailable)"
+            
+            elif any(word in message_lower for word in ['list', 'show', 'meetings', 'agenda']):
+                return "Here are your upcoming meetings: (No meetings found - LLM processing unavailable)"
+            
+            elif any(word in message_lower for word in ['cancel', 'delete', 'remove']):
+                return "I can help you cancel a meeting. (LLM processing unavailable - please try again later)"
+            
+            elif any(word in message_lower for word in ['help', 'what', 'how']):
+                return """🤖 I can help you with:
+• "Schedule meeting tomorrow at 2pm"
+• "List my meetings"  
+• "Cancel today's meeting"
+
+(LLM processing currently unavailable - using basic responses)"""
+            
+            else:
+                return "I'm here to help with meeting coordination! Try asking me to schedule a meeting or list your meetings. (LLM processing unavailable)"
+                
+        except Exception as e:
+            logger.error(f"❌ Basic command processing error: {e}")
+            return "Sorry, I'm having trouble processing your request. Please try again later."

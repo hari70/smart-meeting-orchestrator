@@ -143,8 +143,11 @@ export SURGE_SMS_API_KEY=sk_live_...
 export SURGE_ACCOUNT_ID=acct_...
 export DATABASE_URL=postgresql://...
 
-# Run locally
+# Run locally (tables auto-create on startup via FastAPI lifespan)
 uvicorn main:app --reload
+
+# Admin / Debug Endpoints (protected)
+# Include header: X-API-Key: <your_admin_key>
 ```
 
 ### Testing
@@ -176,6 +179,12 @@ curl -X POST http://localhost:8000/webhook/sms \
 ## 🤝 Contributing
 
 This is a personal family project that demonstrates SMS-MCP architecture patterns. Feel free to fork and adapt for your own use cases!
+
+### Recent Refactor Notes
+- Consolidated multiple legacy `main_*.py` entrypoints into a single `main.py` using FastAPI lifespan.
+- Added lightweight admin & debug API key protection (header: `X-API-Key`).
+- Database portability improvements (custom GUID type, SQLite fallback for tests).
+- Initial pytest suite added; expand with webhook & service mocks next.
 
 ## 📚 Learn More
 

@@ -151,7 +151,7 @@ def main():
 # Additional utility functions for development
 
 def test_webhook_format():
-    """Test what a Surge SMS webhook payload looks like"""
+    """Ensure sample Surge SMS webhook payload structure matches expected keys."""
     sample_webhook = {
         "event": "message.received",
         "message": {
@@ -176,8 +176,9 @@ def test_webhook_format():
     
     print("\n📋 Sample Surge SMS Webhook Payload:")
     print(json.dumps(sample_webhook, indent=2))
-    
-    return sample_webhook
+    assert sample_webhook["event"] == "message.received"
+    assert "message" in sample_webhook and "account" in sample_webhook
+    assert sample_webhook["message"]["conversation"]["contact"]["phone_number"].startswith("+")
 
 def validate_phone_number(phone):
     """Basic phone number validation"""
