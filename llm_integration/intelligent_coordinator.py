@@ -121,13 +121,15 @@ use the tools to actually do it. Don't just respond conversationally.
         
         Key: Tell Claude to USE TOOLS, not just talk
         """
-        current_time = datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')
+        import pytz
+        et_tz = pytz.timezone('US/Eastern')
+        current_time_et = datetime.now(et_tz).strftime('%A, %B %d, %Y at %I:%M %p ET')
         user_timezone = context.get('timezone', 'US/Eastern')
         
         return f"""You are an intelligent meeting coordinator for {user.name}.
 
 CURRENT CONTEXT:
-- Date/Time: {current_time} ({user_timezone})
+- Date/Time: {current_time_et}
 - User: {user.name}
 - Team: {context.get('team_name', 'Family')}
 
@@ -733,56 +735,130 @@ If someone says "schedule a meeting", actually create the calendar event."""
     
     async def _parse_when(self, when_text: str) -> Optional[datetime]:
         """
-        Simple, reliable time parsing
+        Robust, timezone-aware time parsing - FINAL SOLUTION
         
-        If we can't parse it, return None and let Claude ask for clarification
+        Handles: 'tomorrow at 4pm ET', 'Friday at 2pm', '4pm', 'today at 11am'
+        Always returns timezone-aware datetime in Eastern Time
         """
         try:
-            from dateutil import parser
-            from datetime import datetime, timedelta
+            import pytz
             import re
+            from dateutil import parser
             
-            when_lower = when_text.lower()
-            now = datetime.now()
+            when_lower = when_text.lower().strip()
             
-            # Handle relative dates
+            # ALWAYS use Eastern Time as the default timezone
+            et_tz = pytz.timezone('US/Eastern')
+            now_et = datetime.now(et_tz)
+            
+            logger.info(f"🕐 Parsing time: '{when_text}' (current ET time: {now_et.strftime('%Y-%m-%d %H:%M %Z')})")
+            
+            # Step 1: Determine the base date (timezone-aware)
+            base_date = None
+            
             if "tomorrow" in when_lower:
-                base_date = (now + timedelta(days=1)).date()
+                base_date = (now_et + timedelta(days=1)).date()
+                logger.info(f"📅 Base date: tomorrow = {base_date}")
             elif "today" in when_lower:
-                base_date = now.date()
+                base_date = now_et.date()
+                logger.info(f"📅 Base date: today = {base_date}")
+            elif any(day in when_lower for day in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']):
+                # Find next occurrence of the specified day
+                days_of_week = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+                target_day = None
+                for i, day in enumerate(days_of_week):
+                    if day in when_lower:
+                        target_day = i
+                        break
+                
+                if target_day is not None:
+                    current_weekday = now_et.weekday()
+                    days_ahead = (target_day - current_weekday) % 7
+                    if days_ahead == 0:  # Same day
+                        days_ahead = 7 if "next" in when_lower else 0
+                    
+                    base_date = (now_et + timedelta(days=days_ahead)).date()
+                    logger.info(f"📅 Base date: {days_of_week[target_day]} = {base_date}")
             else:
-                # Try to parse as absolute date
+                # Try to parse absolute date or default to today
                 try:
                     parsed = parser.parse(when_text, fuzzy=True)
+                    if parsed.tzinfo is None:
+                        # Make it timezone-aware in ET
+                        parsed = et_tz.localize(parsed)
+                    else:
+                        # Convert to ET
+                        parsed = parsed.astimezone(et_tz)
+                    logger.info(f"📅 Parsed absolute date: {parsed}")
                     return parsed
                 except:
-                    return None
+                    base_date = now_et.date()
+                    logger.info(f"📅 Base date: default to today = {base_date}")
             
-            # Extract time
-            time_match = re.search(r'(\d{1,2}):?(\d{0,2})\s*(am|pm|a\.m\.|p\.m\.)', when_lower)
+            # Step 2: Extract time with timezone support
+            hour = None
+            minute = 0
+            
+            # Enhanced time patterns with timezone support
+            time_patterns = [
+                r'(\d{1,2}):(\d{2})\s*(am|pm|a\.m\.|p\.m\.)(?:\s*(et|est|edt|pt|pst|pdt|ct|cst|cdt|mt|mst|mdt))?',
+                r'(\d{1,2})\s*(am|pm|a\.m\.|p\.m\.)(?:\s*(et|est|edt|pt|pst|pdt|ct|cst|cdt|mt|mst|mdt))?',
+                r'(\d{1,2}):(\d{2})(?:\s*(et|est|edt|pt|pst|pdt|ct|cst|cdt|mt|mst|mdt))?',
+            ]
+            
+            time_match = None
+            for pattern in time_patterns:
+                time_match = re.search(pattern, when_lower)
+                if time_match:
+                    break
+            
             if time_match:
                 hour = int(time_match.group(1))
-                minute = int(time_match.group(2)) if time_match.group(2) else 0
-                ampm = time_match.group(3)
                 
-                if 'p' in ampm and hour != 12:
+                # Handle minutes (might be None for patterns without minutes)
+                if len(time_match.groups()) >= 2 and time_match.group(2) and time_match.group(2).isdigit():
+                    minute = int(time_match.group(2))
+                
+                # Handle AM/PM
+                ampm = None
+                timezone_abbr = None
+                
+                for group in time_match.groups()[1:]:
+                    if group and group.lower() in ['am', 'pm', 'a.m.', 'p.m.']:
+                        ampm = group
+                    elif group and group.lower() in ['et', 'est', 'edt', 'pt', 'pst', 'pdt', 'ct', 'cst', 'cdt', 'mt', 'mst', 'mdt']:
+                        timezone_abbr = group
+                
+                # Convert to 24-hour format
+                if ampm and 'p' in ampm.lower() and hour != 12:
                     hour += 12
-                elif 'a' in ampm and hour == 12:
+                elif ampm and 'a' in ampm.lower() and hour == 12:
                     hour = 0
                 
-                result = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
-                
-                # Add timezone (default to ET)
-                import pytz
-                et_tz = pytz.timezone('US/Eastern')
-                result = et_tz.localize(result)
-                
-                return result
+                logger.info(f"🕐 Extracted time: {hour:02d}:{minute:02d} {ampm or ''} {timezone_abbr or ''}")
+            else:
+                logger.warning(f"⚠️ Could not extract time from '{when_text}'")
+                return None
             
+            # Step 3: Create timezone-aware datetime
+            if base_date and hour is not None:
+                # Create naive datetime first
+                naive_dt = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
+                
+                # Make it timezone-aware in Eastern Time (default)
+                result_dt = et_tz.localize(naive_dt)
+                
+                # TODO: Handle other timezones when specified
+                # For now, always assume/convert to Eastern Time
+                
+                logger.info(f"✅ Final parsed time: {result_dt.strftime('%A, %B %d at %I:%M %p %Z')}")
+                return result_dt
+            
+            logger.warning(f"⚠️ Could not parse '{when_text}' - missing date or time components")
             return None
             
         except Exception as e:
-            logger.warning(f"⚠️ Time parsing failed for '{when_text}': {e}")
+            logger.error(f"❌ Time parsing failed for '{when_text}': {e}")
             return None
     
     async def _find_meeting_by_identifier(self, identifier: str, user, db: Session):
