@@ -7,6 +7,7 @@ import logging
 from app.config import get_settings
 from sms_coordinator.surge_client import SurgeSMSClient
 from google_integrations.direct_google_calendar import DirectGoogleCalendarClient
+from mcp_integration.real_mcp_calendar_client import RealMCPCalendarClient
 from google_integrations.meet_client import GoogleMeetClient
 from llm_integration.intelligent_coordinator import IntelligentCoordinator
 
@@ -19,8 +20,8 @@ surge_client = SurgeSMSClient(
     account_id=settings.surge_account_id or ""
 )
 
-calendar_client = DirectGoogleCalendarClient()
-logger.info("📅 Using Direct Google Calendar API")
+calendar_client = RealMCPCalendarClient()
+logger.info("📅 Using Real MCP Google Calendar tools (your 8 tools)")
 
 meet_client = GoogleMeetClient()
 logger.info("🔗 Meet client initialized")

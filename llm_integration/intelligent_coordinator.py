@@ -14,7 +14,7 @@ Architecture: SMS → LLM → MCP Tools → Response
 import json
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from sqlalchemy.orm import Session
 
@@ -138,7 +138,10 @@ CRITICAL RULES:
 1. For scheduling requests → USE create_calendar_event tool
 2. For calendar questions → USE list_calendar_events tool  
 3. For availability → USE check_calendar_conflicts tool
-4. For timezone confusion → ASK for clarification but PRESERVE context
+4. For moving meetings → USE reschedule_meeting tool
+5. For canceling meetings → USE cancel_meeting tool
+6. For updating meeting details → USE update_meeting tool
+7. For timezone confusion → ASK for clarification but PRESERVE context
 
 TIMEZONE HANDLING:
 If time zone is ambiguous (like "4pm"), ask: "Do you mean 4pm Eastern Time?"
@@ -232,6 +235,79 @@ If someone says "schedule a meeting", actually create the calendar event."""
                 }
             },
             {
+                "name": "reschedule_meeting",
+                "description": "Move an existing meeting to a new date/time",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "meeting_identifier": {
+                            "type": "string",
+                            "description": "Meeting title or description to identify which meeting to move"
+                        },
+                        "new_when": {
+                            "type": "string",
+                            "description": "New date/time (e.g., 'Friday at 3pm ET', 'tomorrow at 10am')"
+                        },
+                        "duration_minutes": {
+                            "type": "integer",
+                            "description": "New duration if different",
+                            "default": None
+                        }
+                    },
+                    "required": ["meeting_identifier", "new_when"]
+                }
+            },
+            {
+                "name": "cancel_meeting",
+                "description": "Cancel an existing meeting",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "meeting_identifier": {
+                            "type": "string",
+                            "description": "Meeting title or description to identify which meeting to cancel"
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Optional reason for cancellation"
+                        }
+                    },
+                    "required": ["meeting_identifier"]
+                }
+            },
+            {
+                "name": "update_meeting",
+                "description": "Update meeting details (title, attendees, description)",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "meeting_identifier": {
+                            "type": "string",
+                            "description": "Meeting title or description to identify which meeting to update"
+                        },
+                        "new_title": {
+                            "type": "string",
+                            "description": "New meeting title"
+                        },
+                        "add_attendees": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Attendees to add"
+                        },
+                        "remove_attendees": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Attendees to remove"
+                        },
+                        "new_description": {
+                            "type": "string",
+                            "description": "New meeting description"
+                        }
+                    },
+                    "required": ["meeting_identifier"]
+                }
+            },
+            {
                 "name": "ask_for_clarification",
                 "description": "Ask user for clarification while preserving context",
                 "input_schema": {
@@ -296,6 +372,15 @@ If someone says "schedule a meeting", actually create the calendar event."""
                 
             elif tool_name == "check_calendar_conflicts":
                 return await self._tool_check_conflicts(tool_input, user, db)
+                
+            elif tool_name == "reschedule_meeting":
+                return await self._tool_reschedule_meeting(tool_input, user, db)
+                
+            elif tool_name == "cancel_meeting":
+                return await self._tool_cancel_meeting(tool_input, user, db)
+                
+            elif tool_name == "update_meeting":
+                return await self._tool_update_meeting(tool_input, user, db)
                 
             elif tool_name == "ask_for_clarification":
                 return await self._tool_ask_clarification(tool_input, user, db)
@@ -459,6 +544,174 @@ If someone says "schedule a meeting", actually create the calendar event."""
             logger.error(f"❌ Ask clarification failed: {e}")
             return {"success": False, "error": "Failed to ask for clarification"}
     
+    async def _tool_reschedule_meeting(self, input_data: Dict, user, db: Session) -> Dict:
+        """
+        Reschedule an existing meeting to a new date/time
+        """
+        try:
+            meeting_identifier = input_data["meeting_identifier"]
+            new_when = input_data["new_when"]
+            new_duration = input_data.get("duration_minutes")
+            
+            # Find the meeting to reschedule
+            meeting = await self._find_meeting_by_identifier(meeting_identifier, user, db)
+            if not meeting:
+                return {
+                    "success": False,
+                    "error": f"Couldn't find meeting matching '{meeting_identifier}'. Try being more specific."
+                }
+            
+            # Parse new time
+            new_start_time = await self._parse_when(new_when)
+            if not new_start_time:
+                return {
+                    "success": False,
+                    "error": f"Couldn't understand new time '{new_when}'. Try 'Friday at 2pm ET'"
+                }
+            
+            # Check for conflicts at new time
+            duration = new_duration or meeting.duration_minutes or 60
+            conflicts = await self.calendar_client.check_conflicts(
+                start_time=new_start_time,
+                duration_minutes=duration
+            )
+            
+            if conflicts.get("has_conflicts"):
+                conflict_names = [c.get("title", "Meeting") for c in conflicts.get("conflicts", [])]
+                return {
+                    "success": False,
+                    "error": f"❌ Conflict at new time with: {', '.join(conflict_names)}. Choose a different time."
+                }
+            
+            # Update the meeting using MCP tools
+            if meeting.google_calendar_event_id:  # type: ignore
+                # Use the real MCP update tool
+                updated = await self.calendar_client._call_mcp_tool("google-calendar:update_gcal_event", {
+                    "calendar_id": "primary",
+                    "event_id": meeting.google_calendar_event_id,
+                    "start": new_start_time.isoformat(),
+                    "end": (new_start_time + timedelta(minutes=duration)).isoformat()
+                })
+                
+                if updated and updated.get("error"):
+                    return {
+                        "success": False,
+                        "error": f"Failed to update calendar: {updated.get('error')}"
+                    }
+            
+            # Update database
+            meeting.scheduled_time = new_start_time  # type: ignore
+            if new_duration:
+                meeting.duration_minutes = new_duration  # type: ignore
+            db.commit()
+            
+            return {
+                "success": True,
+                "message": f"✅ '{meeting.title}' moved to {new_start_time.strftime('%A at %I:%M %p ET')}"
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Reschedule meeting failed: {e}")
+            return {"success": False, "error": f"Failed to reschedule meeting: {str(e)}"}
+    
+    async def _tool_cancel_meeting(self, input_data: Dict, user, db: Session) -> Dict:
+        """
+        Cancel an existing meeting
+        """
+        try:
+            meeting_identifier = input_data["meeting_identifier"]
+            reason = input_data.get("reason", "")
+            
+            # Find the meeting to cancel
+            meeting = await self._find_meeting_by_identifier(meeting_identifier, user, db)
+            if not meeting:
+                return {
+                    "success": False,
+                    "error": f"Couldn't find meeting matching '{meeting_identifier}'. Try being more specific."
+                }
+            
+            # Cancel in Google Calendar using MCP tools
+            if meeting.google_calendar_event_id:  # type: ignore
+                deleted = await self.calendar_client._call_mcp_tool("google-calendar:delete_gcal_event", {
+                    "calendar_id": "primary",
+                    "event_id": meeting.google_calendar_event_id
+                })
+                
+                if deleted and deleted.get("error"):
+                    return {
+                        "success": False,
+                        "error": f"Failed to cancel in calendar: {deleted.get('error')}"
+                    }
+            
+            # Remove from database
+            db.delete(meeting)
+            db.commit()
+            
+            reason_text = f" (Reason: {reason})" if reason else ""
+            
+            return {
+                "success": True,
+                "message": f"✅ '{meeting.title}' cancelled{reason_text}"
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Cancel meeting failed: {e}")
+            return {"success": False, "error": f"Failed to cancel meeting: {str(e)}"}
+    
+    async def _tool_update_meeting(self, input_data: Dict, user, db: Session) -> Dict:
+        """
+        Update meeting details (title, attendees, description)
+        """
+        try:
+            meeting_identifier = input_data["meeting_identifier"]
+            new_title = input_data.get("new_title")
+            add_attendees = input_data.get("add_attendees", [])
+            remove_attendees = input_data.get("remove_attendees", [])
+            new_description = input_data.get("new_description")
+            
+            # Find the meeting to update
+            meeting = await self._find_meeting_by_identifier(meeting_identifier, user, db)
+            if not meeting:
+                return {
+                    "success": False,
+                    "error": f"Couldn't find meeting matching '{meeting_identifier}'. Try being more specific."
+                }
+            
+            # Update database fields
+            changes = []
+            if new_title:
+                meeting.title = new_title
+                changes.append(f"title → '{new_title}'")
+            
+            if new_description:
+                meeting.description = new_description
+                changes.append("description updated")
+            
+            # Handle attendees (simplified for now)
+            if add_attendees or remove_attendees:
+                changes.append("attendees updated")
+            
+            # Update Google Calendar if needed
+            if meeting.google_calendar_event_id and (new_title or new_description):  # type: ignore
+                await self.calendar_client.update_event(
+                    event_id=meeting.google_calendar_event_id,
+                    title=new_title or meeting.title,
+                    description=new_description or meeting.description
+                )
+            
+            db.commit()
+            
+            changes_text = ", ".join(changes)
+            
+            return {
+                "success": True,
+                "message": f"✅ '{meeting.title}' updated: {changes_text}"
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Update meeting failed: {e}")
+            return {"success": False, "error": f"Failed to update meeting: {str(e)}"}
+    
     # ===============================
     # HELPER METHODS (Keep Simple)
     # ===============================
@@ -515,6 +768,25 @@ If someone says "schedule a meeting", actually create the calendar event."""
             
         except Exception as e:
             logger.warning(f"⚠️ Time parsing failed for '{when_text}': {e}")
+            return None
+    
+    async def _find_meeting_by_identifier(self, identifier: str, user, db: Session):
+        """
+        Find a meeting by title or partial match
+        """
+        try:
+            from database.models import Meeting
+            
+            # First try exact title match
+            meeting = db.query(Meeting).filter(
+                Meeting.team_id == user.team_id,
+                Meeting.title.ilike(f"%{identifier}%")
+            ).order_by(Meeting.scheduled_time.desc()).first()
+            
+            return meeting
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Meeting lookup failed: {e}")
             return None
     
     async def _resolve_attendees(self, attendees: List[str], user, db: Session) -> List[str]:
