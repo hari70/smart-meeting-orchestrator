@@ -1265,9 +1265,34 @@ class LLMCommandProcessor:
                     target_date = (now + timedelta(days=1)).date()
                     logger.info(f"📅 [BULLETPROOF PARSER] NO DATE FOUND - defaulting to tomorrow: {target_date} ({target_date.strftime('%A')})")
             
-            # STEP 4: Determine time using simple patterns
+            # STEP 4: Determine time using simple patterns with timezone awareness
             target_hour = 19  # Default 7 PM
             target_minute = 0
+            target_timezone = None  # Will be set based on timezone indicators
+            
+            # Look for timezone indicators first
+            from datetime import timezone as dt_timezone
+            import time
+            
+            if 'et' in message_lower or 'eastern' in message_lower:
+                # Eastern Time (UTC-5 in winter, UTC-4 in summer)
+                target_timezone = dt_timezone(timedelta(hours=-5))  # Simplified to EST
+                logger.info(f"🌍 [BULLETPROOF PARSER] EASTERN TIME detected")
+            elif 'pt' in message_lower or 'pacific' in message_lower:
+                target_timezone = dt_timezone(timedelta(hours=-8))  # PST
+                logger.info(f"🌍 [BULLETPROOF PARSER] PACIFIC TIME detected")
+            elif 'ct' in message_lower or 'central' in message_lower:
+                target_timezone = dt_timezone(timedelta(hours=-6))  # CST
+                logger.info(f"🌍 [BULLETPROOF PARSER] CENTRAL TIME detected")
+            elif 'mt' in message_lower or 'mountain' in message_lower:
+                target_timezone = dt_timezone(timedelta(hours=-7))  # MST
+                logger.info(f"🌍 [BULLETPROOF PARSER] MOUNTAIN TIME detected")
+            else:
+                # Use local timezone
+                local_offset = time.timezone if not time.daylight else time.altzone
+                local_tz_offset = timedelta(seconds=-local_offset)
+                target_timezone = dt_timezone(local_tz_offset)
+                logger.info(f"🌍 [BULLETPROOF PARSER] Using local timezone: {local_tz_offset}")
             
             # Look for time indicators in original message
             time_patterns = [
@@ -1340,18 +1365,13 @@ class LLMCommandProcessor:
                 else:
                     logger.info(f"⏰ [BULLETPROOF PARSER] NO TIME WORD - using default: 7:00 PM")
             
-            # STEP 5: Combine date and time with timezone awareness
+            # STEP 5: Combine date and time with the determined timezone
             try:
-                # Create timezone-aware datetime using local system timezone
-                local_offset = time.timezone if not time.daylight else time.altzone
-                local_tz_offset = timedelta(seconds=-local_offset)
-                local_tz = dt_timezone(local_tz_offset)
-                
                 result = datetime.combine(target_date, datetime.min.time().replace(hour=target_hour, minute=target_minute))
-                result = result.replace(tzinfo=local_tz)
+                result = result.replace(tzinfo=target_timezone)
                 
                 logger.info(f"✅ [BULLETPROOF PARSER] FINAL RESULT (timezone-aware): {result.strftime('%A, %B %d, %Y at %I:%M %p %Z')}")
-                logger.info(f"🕰️ [BULLETPROOF PARSER] Local timezone offset: {local_tz_offset}")
+                logger.info(f"🕰️ [BULLETPROOF PARSER] Using timezone: {target_timezone}")
                 
                 # STEP 6: Verification check
                 if "tomorrow" in message_lower:
@@ -1367,19 +1387,15 @@ class LLMCommandProcessor:
                 
             except ValueError as e:
                 logger.error(f"❌ [BULLETPROOF PARSER] Invalid time: hour={target_hour}, minute={target_minute}, error={e}")
-                # Fallback to 7 PM with timezone
-                local_offset = time.timezone if not time.daylight else time.altzone
-                local_tz_offset = timedelta(seconds=-local_offset)
-                local_tz = dt_timezone(local_tz_offset)
-                
+                # Fallback to 7 PM with the determined timezone
                 result = datetime.combine(target_date, datetime.min.time().replace(hour=19, minute=0))
-                result = result.replace(tzinfo=local_tz)
+                result = result.replace(tzinfo=target_timezone)
                 logger.warning(f"⚠️ [BULLETPROOF PARSER] Using fallback time (timezone-aware): {result}")
                 return result
                 
         except Exception as e:
             logger.error(f"❌ [BULLETPROOF PARSER] Unexpected error: {e}")
-            # Ultimate fallback: tomorrow at 7 PM with timezone
+            # Ultimate fallback: tomorrow at 7 PM with local timezone
             from datetime import timezone as dt_timezone
             import time
             
