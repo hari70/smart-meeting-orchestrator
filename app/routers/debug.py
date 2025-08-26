@@ -40,24 +40,40 @@ async def debug_config():
 
 @router.post("/simulate-sms")
 async def simulate_sms(request: Request, db: Session = Depends(get_db)):
+    """Test the new AI-First Architecture"""
     from app.routers.webhook import _normalize_phone, _get_team_member_by_phone, _get_or_create_conversation
+    
     data = await request.json()
     phone = data.get("phone", "+1234567890")
     message = data.get("message", "Schedule family dinner tomorrow at 7pm")
+    
     norm = _normalize_phone(phone)
     member = _get_team_member_by_phone(norm, db)
     if not member:
         return {"error": "No team member found for this phone"}
+    
     conv = _get_or_create_conversation(norm, db)
-    response = await services.command_processor.process_command_with_llm(message_text=message, team_member=member, conversation=conv, db=db)
+    
+    # Use new AI-First method
+    response = await services.command_processor.process_message(
+        message=message, 
+        user=member, 
+        conversation=conv, 
+        db=db
+    )
+    
     return {"success": True, "response": response}
 
 
 @router.get("/sms-flow-status")
 async def debug_sms_flow_status(db: Session = Depends(get_db)):
+    """Debug status for new AI-First Architecture"""
+    from database.models import Team, TeamMember
+    
     team = db.query(Team).filter(Team.name == "Family").first()
     if not team:
         return {"error": "No Family team"}
+    
     members = db.query(TeamMember).filter(TeamMember.team_id == team.id).all()
     member_info = []
     emails = 0
@@ -66,12 +82,16 @@ async def debug_sms_flow_status(db: Session = Depends(get_db)):
         if email_val:
             emails += 1
         member_info.append({"name": m.name, "phone": m.phone, "has_email": bool(email_val)})
+    
     return {
+        "architecture": "AI-First (SMS → LLM → MCP Tools)",
         "team": team.name,
         "members": member_info,
         "members_with_email": emails,
-        "llm_enabled": getattr(services.command_processor, 'llm_enabled', False),
-        "calendar_enabled": getattr(services.calendar_client, 'enabled', False)
+        "ai_coordinator_enabled": getattr(services.command_processor, 'enabled', False),
+        "calendar_enabled": getattr(services.calendar_client, 'enabled', False),
+        "processor_type": "IntelligentCoordinator",
+        "manual_parsing": "Removed - LLM handles all understanding"
     }
 
 

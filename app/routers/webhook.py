@@ -41,29 +41,33 @@ async def sms_webhook(request: Request, db: Session = Depends(get_db)):
 
 
 async def _process_sms_command(from_number: str, message_text: str, first_name: str, last_name: str, db: Session):
+    """Process SMS through AI-First Architecture"""
+    
+    # Get or create conversation
     conversation = _get_or_create_conversation(from_number, db)
+    
+    # Get team member
     member = _get_team_member_by_phone(from_number, db)
     if not member:
         return await _handle_new_user(from_number, message_text, first_name, last_name, db)
+    
+    # Update conversation context
     _update_conversation_context(conversation, message_text, db)
     
-    # Temporary fallback for testing - bypass LLM issues
+    # Process through Intelligent Coordinator (AI-First)
     try:
-        return await services.command_processor.process_command_with_llm(
-            message_text=message_text,
-            team_member=member,
+        response = await services.command_processor.process_message(
+            message=message_text,
+            user=member,
             conversation=conversation,
             db=db
         )
+        return response
+        
     except Exception as e:
-        logger.error(f"LLM processing failed: {e}")
-        # Simple fallback response for testing
-        if "schedule" in message_text.lower() and "meeting" in message_text.lower():
-            return "I'd help you schedule that meeting! (LLM temporarily unavailable - this is a test response)"
-        elif "list" in message_text.lower() or "meetings" in message_text.lower():
-            return "Here are your upcoming meetings: (No meetings found - LLM temporarily unavailable)"
-        else:
-            return "I'm here to help with meeting coordination! (LLM temporarily unavailable - please try again later)"
+        logger.error(f"❌ AI processing failed: {e}")
+        # Simple fallback
+        return f"Hi {member.name}! I'm having trouble processing that right now. Please try again in a moment."
 
 
 async def _handle_new_user(from_number: str, message_text: str, first_name: str, last_name: str, db: Session):
