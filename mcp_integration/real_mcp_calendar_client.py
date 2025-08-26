@@ -207,6 +207,82 @@ class RealMCPCalendarClient:
             logger.error(f"❌ Error deleting MCP event: {e}")
             return False
     
+    async def check_conflicts(self, start_time: datetime, duration_minutes: int = 60, attendees: Optional[List[str]] = None) -> Dict:
+        """
+        Check for scheduling conflicts using real MCP tools
+        """
+        try:
+            if not self.mcp_enabled:
+                return {"conflicts": [], "has_conflicts": False, "message": "Calendar API not available"}
+            
+            from datetime import timedelta
+            end_time = start_time + timedelta(minutes=duration_minutes)
+            
+            # Use the list_events functionality to check for conflicts
+            time_min = start_time.isoformat() + 'Z'
+            time_max = end_time.isoformat() + 'Z'
+            
+            # Call MCP tool to get events in the time range
+            events_data = await self._call_mcp_tool("google-calendar:list_gcal_events", {
+                "calendar_id": "primary",
+                "time_min": time_min,
+                "time_max": time_max,
+                "max_results": 10
+            })
+            
+            conflicts = []
+            
+            if events_data and not events_data.get("error"):
+                # Handle both MCP format (items) and fallback format (events)
+                events = events_data.get("items") or events_data.get("events", [])
+                
+                for event in events:
+                    # Check if this is already formatted (from DirectGoogleCalendarClient fallback)
+                    if "start_time" in event and not isinstance(event.get("start"), dict):
+                        # Already formatted by DirectGoogleCalendarClient - use as-is
+                        conflicts.append({
+                            "title": event.get("title", "Busy"),
+                            "start": event.get("start_time"),
+                            "end": "N/A",  # DirectGoogleCalendarClient doesn't provide end time
+                            "calendar_link": event.get("calendar_link")
+                        })
+                    else:
+                        # Raw Google Calendar API format
+                        event_start = event["start"].get("dateTime", event["start"].get("date"))
+                        event_end = event["end"].get("dateTime", event["end"].get("date"))
+                        
+                        conflicts.append({
+                            "title": event.get("summary", "Busy"),
+                            "start": event_start,
+                            "end": event_end,
+                            "calendar_link": event.get("htmlLink")
+                        })
+            
+            if conflicts:
+                logger.info(f"⚠️ Found {len(conflicts)} scheduling conflicts via MCP")
+                conflict_titles = [c["title"] for c in conflicts]
+                return {
+                    "conflicts": conflicts,
+                    "has_conflicts": True,
+                    "message": f"Conflict with: {', '.join(conflict_titles)}"
+                }
+            else:
+                logger.info(f"✅ No conflicts found for proposed time via MCP")
+                return {
+                    "conflicts": [],
+                    "has_conflicts": False,
+                    "message": "Time slot is available"
+                }
+            
+        except Exception as e:
+            logger.error(f"❌ Error checking conflicts via MCP: {e}")
+            # Safe fallback - don't block rescheduling due to conflict check failure
+            return {
+                "conflicts": [],
+                "has_conflicts": False,
+                "message": f"Unable to check conflicts ({str(e)}), proceeding anyway"
+            }
+    
     async def _call_mcp_tool(self, tool_name: str, parameters: Dict) -> Optional[Dict]:
         """Call real MCP tool - this is where the magic happens"""
         
