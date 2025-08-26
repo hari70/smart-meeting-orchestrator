@@ -108,18 +108,31 @@ class RealMCPCalendarClient:
             })
             
             if events_data and not events_data.get("error"):
-                events = events_data.get("items", [])
+                # Handle both MCP format (items) and fallback format (events)
+                events = events_data.get("items") or events_data.get("events", [])
                 
                 formatted_events = []
                 for event in events:
-                    start = event["start"].get("dateTime", event["start"].get("date"))
-                    formatted_events.append({
-                        "id": event.get("id"),
-                        "title": event.get("summary", "No title"),
-                        "start_time": start,
-                        "meet_link": event.get("hangoutLink"),
-                        "calendar_link": event.get("htmlLink")
-                    })
+                    # Check if this is already formatted (from DirectGoogleCalendarClient fallback)
+                    if "start_time" in event and not isinstance(event.get("start"), dict):
+                        # Already formatted by DirectGoogleCalendarClient - use as-is
+                        formatted_events.append({
+                            "id": event.get("id"),
+                            "title": event.get("title", "No title"),
+                            "start_time": event.get("start_time"),
+                            "meet_link": event.get("meet_link"),
+                            "calendar_link": event.get("calendar_link")
+                        })
+                    else:
+                        # Raw Google Calendar API format - needs formatting
+                        start = event["start"].get("dateTime", event["start"].get("date"))
+                        formatted_events.append({
+                            "id": event.get("id"),
+                            "title": event.get("summary", "No title"),
+                            "start_time": start,
+                            "meet_link": event.get("hangoutLink"),
+                            "calendar_link": event.get("htmlLink")
+                        })
                 
                 return formatted_events
             
@@ -394,7 +407,10 @@ class RealMCPCalendarClient:
                     days_ahead = parameters.get("days_ahead", 7)
                     limit = parameters.get("max_results", 10)
                     
+                    # DirectGoogleCalendarClient.list_events already returns properly formatted events
                     events = await direct_client.list_events(days_ahead=days_ahead, limit=limit)
+                    
+                    # Return in fallback format - the list_events method will handle this
                     return {"success": True, "events": events}
                     
                 else:
