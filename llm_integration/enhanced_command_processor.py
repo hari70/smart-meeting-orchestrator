@@ -764,15 +764,51 @@ class LLMCommandProcessor:
                 specified_attendees = input_data["attendees"]
                 logger.info(f"👥 Claude specified attendees: {specified_attendees}")
                 
-                # Map names to emails if possible
+                # Enhanced name mapping with fuzzy matching
+                mapped_members = []
+                unmapped_attendees = []
+                
                 for attendee in specified_attendees:
-                    # Try to find matching family member
+                    attendee_found = False
+                    attendee_lower = attendee.lower().strip()
+                    
+                    # Try to find matching family member with multiple strategies
                     for member in team_members:
-                        if member.name.lower() in attendee.lower() or attendee.lower() in member.name.lower():
+                        member_name_lower = member.name.lower().strip()
+                        
+                        # Strategy 1: Exact name match
+                        if member_name_lower == attendee_lower:
                             if member.email and member.phone != team_member.phone:
                                 attendee_emails.append(member.email)
+                                mapped_members.append(f"{member.name} ({member.email})")
+                                attendee_found = True
                                 break
+                        
+                        # Strategy 2: First name match (e.g., "Rick" matches "Rick Smith")
+                        elif ' ' in member_name_lower and attendee_lower in member_name_lower:
+                            if member.email and member.phone != team_member.phone:
+                                attendee_emails.append(member.email)
+                                mapped_members.append(f"{member.name} ({member.email})")
+                                attendee_found = True
+                                break
+                        
+                        # Strategy 3: Partial match (e.g., "Hari" matches "Hari Thangavel")
+                        elif attendee_lower in member_name_lower or member_name_lower in attendee_lower:
+                            if member.email and member.phone != team_member.phone:
+                                attendee_emails.append(member.email)
+                                mapped_members.append(f"{member.name} ({member.email})")
+                                attendee_found = True
+                                break
+                    
+                    if not attendee_found:
+                        unmapped_attendees.append(attendee)
+                
                 logger.info(f"📧 Mapped to emails: {attendee_emails}")
+                logger.info(f"✅ Successfully mapped: {mapped_members}")
+                
+                if unmapped_attendees:
+                    logger.warning(f"⚠️ Could not find team members: {unmapped_attendees}")
+                    logger.warning(f"💡 Available team members: {[m.name for m in team_members]}")
             else:
                 logger.info(f"👤 No attendees specified - creating individual event")
             
