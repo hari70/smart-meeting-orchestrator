@@ -144,12 +144,17 @@ CRITICAL WORKFLOW:
 5. For canceling meetings → Use google-calendar:search_gcal_events to find, then google-calendar:delete_gcal_event
 6. For timezone confusion → Use ask_for_clarification but PRESERVE context
 
+CRITICAL: When rescheduling, ALWAYS preserve the original meeting title!
+- Get original title from search results
+- Pass original title as 'summary' in update_gcal_event
+
 TOOL USAGE RULES:
 - ALWAYS use parse_time_expression before creating/updating events
 - When searching for meetings, use the meeting title as the search query
-- For rescheduling: search → get event_id → update with new time
+- For rescheduling: search → get event_id AND original title → update with new time AND original title
 - Pass calendar_id="primary" for all Google Calendar tools
 - Use time_zone="America/New_York" as default
+- NEVER change meeting titles during rescheduling - always preserve the original title
 
 CONTEXT AWARENESS:
 - If user says "how about 2pm" after trying to reschedule, they mean reschedule the SAME meeting
@@ -170,7 +175,10 @@ Create Meeting:
 Reschedule Meeting:
 1. google-calendar:search_gcal_events("AI Talk")
 2. parse_time_expression("Friday at 3pm ET", 60) 
-3. google-calendar:update_gcal_event with event_id and new times
+3. google-calendar:update_gcal_event with event_id, ORIGINAL TITLE, and new times
+   - MUST include summary: <original_title_from_search>
+   - MUST include start: <new_start_iso>
+   - MUST include end: <new_end_iso>
 
 List Events:
 1. Calculate time_min/time_max in ISO format
