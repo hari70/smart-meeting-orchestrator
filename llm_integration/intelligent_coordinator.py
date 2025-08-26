@@ -142,6 +142,12 @@ CRITICAL RULES:
 5. For canceling meetings → USE cancel_meeting tool
 6. For updating meeting details → USE update_meeting tool
 7. For timezone confusion → ASK for clarification but PRESERVE context
+8. For follow-up rescheduling → MAINTAIN context about which meeting is being moved
+
+CONTEXT AWARENESS:
+- If user says "how about 2pm" after trying to reschedule, they mean reschedule the SAME meeting
+- If user says "move it to X" they mean the meeting from the previous message
+- Don't ask "what meeting" if context is clear from conversation
 
 TIMEZONE HANDLING:
 If time zone is ambiguous (like "4pm"), ask: "Do you mean 4pm Eastern Time?"
@@ -569,19 +575,28 @@ If someone says "schedule a meeting", actually create the calendar event."""
                     "error": f"Couldn't understand new time '{new_when}'. Try 'Friday at 2pm ET'"
                 }
             
-            # Check for conflicts at new time
+            # Check for conflicts at new time (excluding the meeting being rescheduled)
             duration = new_duration or meeting.duration_minutes or 60
             conflicts = await self.calendar_client.check_conflicts(
                 start_time=new_start_time,
                 duration_minutes=duration
             )
             
+            # Filter out the meeting being rescheduled from conflicts
             if conflicts.get("has_conflicts"):
-                conflict_names = [c.get("title", "Meeting") for c in conflicts.get("conflicts", [])]
-                return {
-                    "success": False,
-                    "error": f"❌ Conflict at new time with: {', '.join(conflict_names)}. Choose a different time."
-                }
+                conflict_list = conflicts.get("conflicts", [])
+                # Remove the current meeting from conflicts (it's expected to be there)
+                filtered_conflicts = [
+                    c for c in conflict_list 
+                    if c.get("title", "").lower() != meeting.title.lower()
+                ]
+                
+                if filtered_conflicts:
+                    conflict_names = [c.get("title", "Meeting") for c in filtered_conflicts]
+                    return {
+                        "success": False,
+                        "error": f"❌ Conflict at new time with: {', '.join(conflict_names)}. Choose a different time."
+                    }
             
             # Update the meeting using MCP tools
             if meeting.google_calendar_event_id:  # type: ignore
@@ -861,7 +876,7 @@ If someone says "schedule a meeting", actually create the calendar event."""
             if conversation and conversation.context:
                 recent = conversation.context.get("recent_messages", [])
                 if recent:
-                    context["conversation_history"] = recent[-3:]  # Last 3 messages
+                    context["conversation_history"] = recent[-5:]  # Last 5 messages for better context
             
             return context
             
