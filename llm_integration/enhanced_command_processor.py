@@ -101,6 +101,20 @@ class LLMCommandProcessor:
                         "proposed_time": {"type": "string", "description": "Proposed meeting time to check against workouts"},
                         "limit": {"type": "integer", "description": "Number of recent activities to analyze", "default": 7}
                     }
+            },
+            {
+                "name": "create_calendar_event_with_emails",
+                "description": "Create a calendar event when user has provided email addresses for previously unknown attendees. Use this when user responds with email addresses after you asked for them.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Event title (use from pending event if available)"},
+                        "start_time": {"type": "string", "description": "Start time in ISO format (use from pending event if available)"},
+                        "duration_minutes": {"type": "integer", "description": "Duration in minutes", "default": 60},
+                        "provided_emails": {"type": "array", "items": {"type": "string"}, "description": "Email addresses provided by the user"},
+                        "description": {"type": "string", "description": "Event description"}
+                    },
+                    "required": ["provided_emails"]
                 }
             }
         ]
@@ -247,9 +261,19 @@ class LLMCommandProcessor:
                 pending = conversation.context["pending_confirmation"]
                 pending_context = "\n=== PENDING CONFIRMATION ===\n"
                 pending_context += "Type: " + pending.get('type', 'unknown') + "\n"
-                if "details" in pending:
+                
+                if pending.get('type') == 'waiting_for_emails':
+                    # Special handling for email waiting
+                    event_details = pending.get('event_details', {})
+                    unmapped_attendees = pending.get('unmapped_attendees', [])
+                    pending_context += "Event: " + event_details.get('title', 'Meeting') + "\n"
+                    pending_context += "Time: " + event_details.get('start_time', 'TBD') + "\n"
+                    pending_context += "Waiting for email addresses for: " + ', '.join(unmapped_attendees) + "\n"
+                    pending_context += "\nIMPORTANT: If the user's current message contains email addresses, extract them and create the calendar event with the stored event details plus the provided email addresses as attendees. Use create_calendar_event tool.\n"
+                elif "details" in pending:
                     details = pending["details"]
                     pending_context += "Details: " + json.dumps(details, indent=2) + "\n"
+                    
                 pending_context += "\nThe user may be responding to this pending item.\n"
                 logger.info(f"⏳ [PENDING] Found pending confirmation: {pending.get('type')}")
             
@@ -389,6 +413,32 @@ class LLMCommandProcessor:
         
         # If tools were used, get Claude's final response based on results
         if tool_results:
+            # Check if any tool result requires asking for email addresses
+            ask_for_emails_result = None
+            for result in tool_results:
+                if result['result'].get('ask_for_emails'):
+                    ask_for_emails_result = result['result']
+                    break
+            
+            if ask_for_emails_result:
+                # Handle ask for emails case - return directly without calling Claude again
+                unmapped = ask_for_emails_result.get('unmapped_attendees', [])
+                event_details = ask_for_emails_result.get('event_details', {})
+                
+                logger.info(f"❓ Asking user for email addresses for: {unmapped}")
+                
+                # Store the pending event details for when user provides emails
+                await self._store_pending_event_creation(team_member, message_text, event_details, unmapped, db)
+                
+                # Generate friendly response asking for emails
+                title = event_details.get('title', 'meeting')
+                time_str = event_details.get('start_time', '')
+                
+                if len(unmapped) == 1:
+                    return f"I'll schedule '{title}' for {time_str}, but I couldn't find {unmapped[0]} in your team. Could you provide their email address so I can invite them?"
+                else:
+                    return f"I'll schedule '{title}' for {time_str}, but I couldn't find {', '.join(unmapped)} in your team. Could you provide their email addresses so I can invite them?"
+            
             logger.info(f"🎯 Tool execution complete. Getting final response from Claude...")
             
             tool_summary = "\\n".join([
@@ -451,6 +501,9 @@ class LLMCommandProcessor:
             elif tool_name == "list_upcoming_events":
                 return await self._tool_list_events(tool_input, team_member, db, message_text)
             
+            elif tool_name == "create_calendar_event_with_emails":
+                return await self._tool_create_calendar_event_with_emails(tool_input, team_member, db, message_text)
+            
             elif tool_name == "get_workout_context":
                 return await self._tool_get_workout_context(tool_input, team_member, message_text)
             
@@ -487,6 +540,34 @@ class LLMCommandProcessor:
                 logger.info(f"⏳ [PENDING] Stored pending confirmation for {team_member.name}")
         except Exception as e:
             logger.error(f"⚠️ [PENDING] Failed to store pending confirmation: {e}")
+    
+    async def _store_pending_event_creation(self, team_member, original_message: str, event_details: Dict, unmapped_attendees: List[str], db):
+        """Store pending event creation when waiting for email addresses."""
+        try:
+            from database.models import Conversation
+                
+            conversation = db.query(Conversation).filter(
+                Conversation.phone_number == team_member.phone
+            ).first()
+                
+            if conversation:
+                if not conversation.context:
+                    conversation.context = {}
+                    
+                # Store pending event creation details
+                conversation.context["pending_confirmation"] = {
+                    "type": "waiting_for_emails",
+                    "original_request": original_message,
+                    "event_details": event_details,
+                    "unmapped_attendees": unmapped_attendees,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "awaiting_response": True
+                }
+                    
+                db.commit()
+                logger.info(f"✉️ [PENDING] Stored pending event creation waiting for emails: {unmapped_attendees}")
+        except Exception as e:
+            logger.error(f"⚠️ [PENDING] Failed to store pending event creation: {e}")
     
     async def _store_pending_question(self, team_member, original_message: str, question_response: str, db):
         """Store pending question state in conversation context."""
@@ -809,8 +890,34 @@ class LLMCommandProcessor:
                 if unmapped_attendees:
                     logger.warning(f"⚠️ Could not find team members: {unmapped_attendees}")
                     logger.warning(f"💡 Available team members: {[m.name for m in team_members]}")
+                    
+                    # Store unmapped attendees for the response - LLM should ask for emails
+                    input_data["_unmapped_attendees"] = unmapped_attendees
+                    input_data["_available_members"] = [m.name for m in team_members]
+                    input_data["_should_ask_for_emails"] = True
             else:
                 logger.info(f"👤 No attendees specified - creating individual event")
+            
+            # Check if we need to ask for email addresses before creating the event
+            if input_data.get("_should_ask_for_emails"):
+                unmapped = input_data.get("_unmapped_attendees", [])
+                available = input_data.get("_available_members", [])
+                
+                logger.info(f"❓ Need to ask for email addresses for: {unmapped}")
+                
+                return {
+                    "success": False,
+                    "ask_for_emails": True,
+                    "unmapped_attendees": unmapped,
+                    "available_members": available,
+                    "message": f"I couldn't find {', '.join(unmapped)} in your team. Could you provide their email address(es) so I can invite them?",
+                    "suggested_action": "ask_for_emails",
+                    "event_details": {
+                        "title": input_data["title"],
+                        "start_time": start_time.strftime("%A, %B %d at %I:%M %p"),
+                        "duration_minutes": input_data.get("duration_minutes", 60)
+                    }
+                }
             
             # Log attendee decision
             if attendee_emails:
@@ -871,6 +978,118 @@ class LLMCommandProcessor:
         except Exception as e:
             logger.error(f"❌ Calendar event creation failed: {str(e)}", exc_info=True)
             return {"error": f"Calendar event creation failed: {str(e)}"}
+    
+    async def _tool_create_calendar_event_with_emails(self, input_data: Dict, team_member, db, message_text: str) -> Dict:
+        """Create calendar event when user provides email addresses for unknown attendees"""
+        
+        try:
+            # Get pending event details from conversation context
+            from database.models import Conversation
+            
+            conversation = db.query(Conversation).filter(
+                Conversation.phone_number == team_member.phone
+            ).first()
+            
+            if not conversation or not conversation.context.get("pending_confirmation"):
+                return {"error": "No pending event found. Please start a new scheduling request."}
+            
+            pending = conversation.context["pending_confirmation"]
+            
+            if pending.get('type') != 'waiting_for_emails':
+                return {"error": "No pending email request found."}
+            
+            # Get the stored event details
+            event_details = pending.get('event_details', {})
+            unmapped_attendees = pending.get('unmapped_attendees', [])
+            provided_emails = input_data.get('provided_emails', [])
+            
+            # Use event details from pending or input
+            title = input_data.get('title') or event_details.get('title', 'Meeting')
+            start_time_str = input_data.get('start_time') or event_details.get('start_time')
+            duration_minutes = input_data.get('duration_minutes', event_details.get('duration_minutes', 60))
+            
+            logger.info(f"✉️ Creating event with provided emails: {provided_emails}")
+            logger.info(f"📅 Event details: {title} at {start_time_str}")
+            
+            # Parse the time
+            start_time = self._parse_datetime_bulletproof(start_time_str, message_text)
+            if not start_time:
+                return {"error": f"Could not parse start time: {start_time_str}"}
+            
+            # Get team members
+            from database.models import Team, TeamMember
+            team = db.query(Team).filter(Team.id == team_member.team_id).first()
+            team_members = db.query(TeamMember).filter(TeamMember.team_id == team.id).all()
+            
+            # Create Google Meet link
+            logger.info(f"🔗 Creating Google Meet link...")
+            meet_link = await self.meet_client.create_meeting(title)
+            logger.info(f"✅ Meet link created: {meet_link}")
+            
+            # Build attendee list: existing team members + provided emails
+            attendee_emails = []
+            
+            # Add existing team members (excluding the creator)
+            for member in team_members:
+                if member.email and member.phone != team_member.phone:
+                    attendee_emails.append(member.email)
+            
+            # Add provided emails
+            for email in provided_emails:
+                if email and '@' in email and email not in attendee_emails:
+                    attendee_emails.append(email.strip())
+            
+            logger.info(f"📧 Final attendee list: {attendee_emails}")
+            
+            # Create the calendar event
+            event = await self.calendar_client.create_event(
+                title=title,
+                start_time=start_time,
+                duration_minutes=duration_minutes,
+                attendees=attendee_emails,
+                meet_link=meet_link
+            )
+            
+            if event:
+                logger.info(f"✅ Calendar event created successfully with provided emails")
+                
+                # Save to database
+                from database.models import Meeting
+                meeting = Meeting(
+                    team_id=team_member.team_id,
+                    title=title,
+                    scheduled_time=start_time,
+                    google_meet_link=meet_link,
+                    google_calendar_event_id=event.get("id"),
+                    created_by_phone=team_member.phone,
+                    description=input_data.get("description", "")
+                )
+                db.add(meeting)
+                db.commit()
+                
+                # Clear the pending confirmation
+                conversation.context["pending_confirmation"] = None
+                db.commit()
+                
+                logger.info(f"💾 Meeting saved and pending confirmation cleared")
+                
+                return {
+                    "success": True,
+                    "event_id": event.get("id"),
+                    "title": title,
+                    "start_time": start_time.strftime("%A, %B %d at %I:%M %p"),
+                    "meet_link": meet_link,
+                    "attendees_invited": len(attendee_emails),
+                    "provided_emails": provided_emails,
+                    "calendar_source": event.get("source", "unknown"),
+                    "real_calendar_event": event.get("source") != "mock"
+                }
+            else:
+                return {"error": "Failed to create calendar event"}
+                
+        except Exception as e:
+            logger.error(f"❌ Error creating event with provided emails: {str(e)}", exc_info=True)
+            return {"error": f"Failed to create event: {str(e)}"}
     
     async def _tool_list_events(self, input_data: Dict, team_member, db, message_text: str) -> Dict:
         """List upcoming events"""
