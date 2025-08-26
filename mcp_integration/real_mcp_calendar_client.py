@@ -228,7 +228,8 @@ class RealMCPCalendarClient:
                 "calendar_id": "primary",
                 "time_min": time_min,
                 "time_max": time_max,
-                "max_results": 10
+                "max_results": 10,
+                "exclude_meeting_title": exclude_meeting_title  # Pass exclusion to fallback
             })
             
             conflicts = []
@@ -451,7 +452,6 @@ class RealMCPCalendarClient:
                     start_str = parameters.get("start")
                     if start_str:
                         try:
-                            from datetime import datetime
                             if isinstance(start_str, str):
                                 # Try to parse ISO format
                                 if 'T' in start_str:
@@ -494,14 +494,59 @@ class RealMCPCalendarClient:
                 elif tool_name == "google-calendar:list_gcal_events":
                     logger.info(f"🔄 Fallback: Listing events via Direct Google Calendar API")
                     
-                    days_ahead = parameters.get("days_ahead", 7)
-                    limit = parameters.get("max_results", 10)
+                    # Check if this is being called from check_conflicts with time filtering
+                    time_min = parameters.get("time_min")
+                    time_max = parameters.get("time_max")
+                    exclude_meeting_title = parameters.get("exclude_meeting_title")
                     
-                    # DirectGoogleCalendarClient.list_events already returns properly formatted events
-                    events = await direct_client.list_events(days_ahead=days_ahead, limit=limit)
-                    
-                    # Return in fallback format - the list_events method will handle this
-                    return {"success": True, "events": events}
+                    if time_min and time_max:
+                        # This is a conflict check - use specific time range filtering
+                        logger.info(f"🔍 Fallback conflict check for time range: {time_min} to {time_max}")
+                        if exclude_meeting_title:
+                            logger.info(f"🔍 Excluding meeting: {exclude_meeting_title}")
+                        
+                        # Parse the time range from ISO format
+                        try:
+                            start_time = datetime.fromisoformat(time_min.replace('Z', '+00:00'))
+                            end_time = datetime.fromisoformat(time_max.replace('Z', '+00:00'))
+                            duration_minutes = int((end_time - start_time).total_seconds() / 60)
+                            
+                            # Call DirectGoogleCalendarClient's check_conflicts directly
+                            conflict_result = await direct_client.check_conflicts(
+                                start_time=start_time,
+                                duration_minutes=duration_minutes,
+                                exclude_meeting_title=exclude_meeting_title
+                            )
+                            
+                            # Convert conflict result to list format expected by RealMCPCalendarClient
+                            if conflict_result.get("has_conflicts"):
+                                conflicts = conflict_result.get("conflicts", [])
+                                # Convert to Google Calendar API format
+                                items = []
+                                for conflict in conflicts:
+                                    items.append({
+                                        "summary": conflict.get("title", "Busy"),
+                                        "start": {"dateTime": conflict.get("start")},
+                                        "end": {"dateTime": conflict.get("end")},
+                                        "htmlLink": conflict.get("calendar_link")
+                                    })
+                                return {"success": True, "items": items}
+                            else:
+                                return {"success": True, "items": []}
+                                
+                        except Exception as time_parse_error:
+                            logger.error(f"❌ Error parsing time range in fallback: {time_parse_error}")
+                            return {"success": True, "items": []}
+                    else:
+                        # Regular list_events call
+                        days_ahead = parameters.get("days_ahead", 7) 
+                        limit = parameters.get("max_results", 10)
+                        
+                        # DirectGoogleCalendarClient.list_events already returns properly formatted events
+                        events = await direct_client.list_events(days_ahead=days_ahead, limit=limit)
+                        
+                        # Return in fallback format - the list_events method will handle this
+                        return {"success": True, "events": events}
                     
                 else:
                     logger.warning(f"⚠️ Tool {tool_name} not supported in direct fallback")
