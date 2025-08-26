@@ -207,6 +207,57 @@ class RealMCPCalendarClient:
             logger.error(f"❌ Error deleting MCP event: {e}")
             return False
     
+    async def update_event(self, event_id: str, title: str = None, start_time: datetime = None, 
+                          duration_minutes: int = None, attendees: List[str] = None) -> Optional[Dict]:
+        """Update event using real MCP tools"""
+        
+        if not self.mcp_enabled:
+            return None
+        
+        try:
+            # Prepare update parameters
+            update_params = {
+                "calendar_id": "primary",
+                "event_id": event_id
+            }
+            
+            if title:
+                update_params["summary"] = title
+                
+            if start_time and duration_minutes:
+                end_time = start_time + timedelta(minutes=duration_minutes)
+                update_params["start"] = start_time.isoformat()
+                update_params["end"] = end_time.isoformat()
+                update_params["time_zone"] = "America/New_York"
+                
+            if attendees:
+                attendee_list = []
+                for email in attendees:
+                    if email and '@' in email:
+                        attendee_list.append({"email": email})
+                update_params["attendees"] = attendee_list
+            
+            # Call real MCP Google Calendar update_event tool
+            result = await self._call_mcp_tool("google-calendar:update_gcal_event", update_params)
+            
+            if result and not result.get("error"):
+                logger.info(f"✅ Successfully updated event via MCP: {result.get('id')}")
+                return {
+                    "id": result.get("id"),
+                    "title": result.get("summary", title),
+                    "start_time": result.get("start", {}).get("dateTime"),
+                    "end_time": result.get("end", {}).get("dateTime"),
+                    "calendar_link": result.get("htmlLink"),
+                    "source": "real_mcp_tools"
+                }
+            else:
+                logger.error(f"❌ MCP update tool failed: {result}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Error updating MCP event: {e}")
+            return None
+    
     async def check_conflicts(self, start_time: datetime, duration_minutes: int = 60, 
                             attendees: Optional[List[str]] = None, exclude_meeting_title: Optional[str] = None) -> Dict:
         """
@@ -547,6 +598,75 @@ class RealMCPCalendarClient:
                         
                         # Return in fallback format - the list_events method will handle this
                         return {"success": True, "events": events}
+                        
+                elif tool_name == "google-calendar:update_gcal_event":
+                    logger.info(f"🔄 Fallback: Updating event via Direct Google Calendar API")
+                    
+                    # Extract parameters for event update
+                    event_id = parameters.get("event_id")
+                    summary = parameters.get("summary")
+                    start_str = parameters.get("start")
+                    end_str = parameters.get("end")
+                    
+                    if not event_id:
+                        logger.error("❌ Missing event_id for update")
+                        return {"error": "Missing event_id parameter"}
+                    
+                    try:
+                        # Parse new start and end times
+                        if start_str and end_str:
+                            start_time = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                            end_time = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
+                            duration_minutes = int((end_time - start_time).total_seconds() / 60)
+                        else:
+                            logger.error("❌ Missing start/end times for update")
+                            return {"error": "Missing start/end time parameters"}
+                        
+                        # DirectGoogleCalendarClient doesn't have update_event, so we'll delete and recreate
+                        logger.info(f"🔄 Rescheduling event {event_id}: delete + recreate")
+                        
+                        # First delete the old event
+                        delete_success = await direct_client.delete_event(event_id)
+                        if not delete_success:
+                            logger.warning("⚠️ Failed to delete old event, proceeding with create anyway")
+                        
+                        # Create new event with updated time
+                        new_event = await direct_client.create_event(
+                            title=summary or "Updated Meeting",
+                            start_time=start_time,
+                            duration_minutes=duration_minutes,
+                            attendees=None
+                        )
+                        
+                        if new_event:
+                            logger.info(f"✅ Successfully rescheduled event: {new_event.get('title')}")
+                            return {
+                                "id": new_event.get("id"),
+                                "summary": new_event.get("title"),
+                                "start": {"dateTime": new_event.get("start_time")},
+                                "end": {"dateTime": new_event.get("end_time")},
+                                "htmlLink": new_event.get("calendar_link")
+                            }
+                        else:
+                            logger.error("❌ Failed to create new event after deletion")
+                            return {"error": "Failed to create updated event"}
+                            
+                    except Exception as update_error:
+                        logger.error(f"❌ Error updating event in fallback: {update_error}")
+                        return {"error": f"Update failed: {str(update_error)}"}
+                        
+                elif tool_name == "google-calendar:delete_gcal_event":
+                    logger.info(f"🔄 Fallback: Deleting event via Direct Google Calendar API")
+                    
+                    event_id = parameters.get("event_id")
+                    if not event_id:
+                        return {"error": "Missing event_id parameter"}
+                    
+                    success = await direct_client.delete_event(event_id)
+                    if success:
+                        return {"success": True, "message": "Event deleted"}
+                    else:
+                        return {"error": "Failed to delete event"}
                     
                 else:
                     logger.warning(f"⚠️ Tool {tool_name} not supported in direct fallback")
