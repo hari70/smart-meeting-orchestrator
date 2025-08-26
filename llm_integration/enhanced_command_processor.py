@@ -1330,10 +1330,20 @@ class LLMCommandProcessor:
                 else:
                     logger.info(f"⏰ [BULLETPROOF PARSER] NO TIME WORD - using default: 7:00 PM")
             
-            # STEP 5: Combine date and time
+            # STEP 5: Combine date and time with timezone awareness
             try:
+                from datetime import timezone as dt_timezone
+                import time
+                
+                # Create timezone-aware datetime
                 result = datetime.combine(target_date, datetime.min.time().replace(hour=target_hour, minute=target_minute))
-                logger.info(f"✅ [BULLETPROOF PARSER] FINAL RESULT: {result.strftime('%A, %B %d, %Y at %I:%M %p')}")
+                
+                # Add timezone info - get system timezone offset
+                local_offset = time.timezone if not time.daylight else time.altzone
+                local_tz_offset = timedelta(seconds=-local_offset)
+                result = result.replace(tzinfo=dt_timezone(local_tz_offset))
+                
+                logger.info(f"✅ [BULLETPROOF PARSER] FINAL RESULT (timezone-aware): {result.strftime('%A, %B %d, %Y at %I:%M %p %Z')}")
                 
                 # STEP 6: Verification check
                 if "tomorrow" in message_lower:
@@ -1349,16 +1359,27 @@ class LLMCommandProcessor:
                 
             except ValueError as e:
                 logger.error(f"❌ [BULLETPROOF PARSER] Invalid time: hour={target_hour}, minute={target_minute}, error={e}")
-                # Fallback to 7 PM
+                # Fallback to 7 PM with timezone
                 result = datetime.combine(target_date, datetime.min.time().replace(hour=19, minute=0))
-                logger.warning(f"⚠️ [BULLETPROOF PARSER] Using fallback time: {result}")
+                # Add timezone info
+                local_offset = time.timezone if not time.daylight else time.altzone
+                local_tz_offset = timedelta(seconds=-local_offset)
+                result = result.replace(tzinfo=dt_timezone(local_tz_offset))
+                logger.warning(f"⚠️ [BULLETPROOF PARSER] Using fallback time (timezone-aware): {result}")
                 return result
                 
         except Exception as e:
             logger.error(f"❌ [BULLETPROOF PARSER] Unexpected error: {e}")
-            # Ultimate fallback: tomorrow at 7 PM
+            # Ultimate fallback: tomorrow at 7 PM with timezone
+            from datetime import timezone as dt_timezone
+            import time
+            
             fallback = datetime.combine((now + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
-            logger.warning(f"🆘 [BULLETPROOF PARSER] Ultimate fallback: {fallback}")
+            # Add timezone info
+            local_offset = time.timezone if not time.daylight else time.altzone
+            local_tz_offset = timedelta(seconds=-local_offset)
+            fallback = fallback.replace(tzinfo=dt_timezone(local_tz_offset))
+            logger.warning(f"🆘 [BULLETPROOF PARSER] Ultimate fallback (timezone-aware): {fallback}")
             return fallback
     
     async def _get_team_context(self, team_member, db) -> Dict:

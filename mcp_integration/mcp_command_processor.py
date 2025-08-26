@@ -408,16 +408,24 @@ ACTION REQUIRED NOW."""
                 else:
                     logger.warning(f"⚠️ [MCP] No time found in '{message}', defaulting to 7:00 PM")
             
-            # Combine date and time
+            # Combine date and time with timezone awareness
             logger.info(f"📅 [MCP FINAL DEBUG] About to combine date and time:")
             logger.info(f"   base_date: {base_date}")
             logger.info(f"   hour: {hour}, minute: {minute}")
             
+            from datetime import timezone as dt_timezone
+            import time
+            
             result = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
             
-            logger.info(f"📅 [MCP FINAL DEBUG] Combined result: {result}")
+            # Add timezone info - get system timezone offset
+            local_offset = time.timezone if not time.daylight else time.altzone
+            local_tz_offset = timedelta(seconds=-local_offset)
+            result = result.replace(tzinfo=dt_timezone(local_tz_offset))
+            
+            logger.info(f"📅 [MCP FINAL DEBUG] Combined result (timezone-aware): {result}")
             logger.info(f"📅 [MCP FINAL DEBUG] Result weekday: {result.weekday()} (0=Mon, 1=Tue, 2=Wed)")
-            logger.info(f"✅ [MCP] Final parsed datetime: {result.strftime('%A, %B %d, %Y at %I:%M %p')}")
+            logger.info(f"✅ [MCP] Final parsed datetime: {result.strftime('%A, %B %d, %Y at %I:%M %p %Z')}")
             
             # Double-check the math
             if "tomorrow" in message.lower():
@@ -428,15 +436,22 @@ ACTION REQUIRED NOW."""
                     logger.error(f"   Actually got: {result.date()} ({result.strftime('%A')})")
                     logger.error(f"   Difference: {(result.date() - expected_date).days} days")
                 else:
-                    logger.info(f"✅ [MCP] Date calculation verified correct for 'tomorrow'")
+                    logger.info(f"✅ [MCP] Date calculation verified correct for 'tomorrow' (timezone-aware)")
             
             return result
             
         except Exception as e:
             logger.error(f"❌ [MCP] Failed to parse datetime: {message}, error: {e}")
-            # Return tomorrow at 7 PM as fallback
+            # Return tomorrow at 7 PM as fallback with timezone
+            from datetime import timezone as dt_timezone
+            import time
+                        
             fallback = datetime.combine((datetime.now() + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
-            logger.warning(f"⚠️ [MCP] Using fallback datetime: {fallback}")
+            # Add timezone info
+            local_offset = time.timezone if not time.daylight else time.altzone
+            local_tz_offset = timedelta(seconds=-local_offset)
+            fallback = fallback.replace(tzinfo=dt_timezone(local_tz_offset))
+            logger.warning(f"⚠️ [MCP] Using fallback datetime (timezone-aware): {fallback}")
             return fallback
     
     async def _execute_action_tool(self, tool_name: str, tool_input: Dict, team_member, db) -> Dict:

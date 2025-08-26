@@ -90,17 +90,32 @@ class DirectGoogleCalendarClient:
             
             end_time = start_time + timedelta(minutes=duration_minutes)
             
+            # Handle timezone awareness - convert naive datetime to timezone-aware
+            if start_time.tzinfo is None:
+                from datetime import timezone as dt_timezone
+                import time
+                # Get system timezone offset
+                local_offset = time.timezone if not time.daylight else time.altzone
+                local_tz_offset = timedelta(seconds=-local_offset)
+                start_time = start_time.replace(tzinfo=dt_timezone(local_tz_offset))
+                end_time = end_time.replace(tzinfo=dt_timezone(local_tz_offset))
+                logger.info(f"🕐 Converted to timezone-aware: {start_time.isoformat()}")
+            
+            # Determine timezone string for Google Calendar
+            # For now, use Eastern Time but this should be user-configurable
+            calendar_timezone = "America/New_York"  # TODO: Make configurable per user
+            
             # Prepare event data
             event_data = {
                 "summary": title,
                 "description": f"Created via SMS\\n{f'Meeting link: {meet_link}' if meet_link else ''}",
                 "start": {
                     "dateTime": start_time.isoformat(),
-                    "timeZone": "America/New_York"
+                    "timeZone": calendar_timezone
                 },
                 "end": {
                     "dateTime": end_time.isoformat(), 
-                    "timeZone": "America/New_York"
+                    "timeZone": calendar_timezone
                 },
                 "attendees": [{"email": email} for email in (attendees or [])],
                 "reminders": {
