@@ -230,7 +230,7 @@ class DirectGoogleCalendarClient:
             return None
     
     async def list_events(self, days_ahead: int = 7, limit: int = 10) -> List[Dict]:
-        """List upcoming events from Google Calendar"""
+        """List upcoming events from Google Calendar with proper timezone formatting"""
         
         if not self.enabled:
             return []
@@ -265,14 +265,34 @@ class DirectGoogleCalendarClient:
                 
                 formatted_events = []
                 for event in events:
-                    start = event["start"].get("dateTime", event["start"].get("date"))
-                    formatted_events.append({
-                        "id": event.get("id"),
-                        "title": event.get("summary", "No title"),
-                        "start_time": start,
-                        "meet_link": event.get("hangoutLink"),
-                        "calendar_link": event.get("htmlLink")
-                    })
+                    try:
+                        # Get the raw start time from Google Calendar
+                        start_raw = event["start"].get("dateTime", event["start"].get("date"))
+                        event_title = event.get("summary", "No title")
+                        
+                        # Parse and format the datetime with proper timezone handling
+                        formatted_start_time = self._format_event_time(start_raw)
+                        
+                        formatted_events.append({
+                            "id": event.get("id"),
+                            "title": event_title,
+                            "start_time": formatted_start_time,
+                            "meet_link": event.get("hangoutLink"),
+                            "calendar_link": event.get("htmlLink")
+                        })
+                        
+                        logger.info(f"📋 Formatted event: {event_title} at {formatted_start_time}")
+                        
+                    except Exception as format_error:
+                        logger.warning(f"⚠️ Failed to format event {event.get('id', 'unknown')}: {format_error}")
+                        # Fallback to raw data
+                        formatted_events.append({
+                            "id": event.get("id"),
+                            "title": event.get("summary", "No title"),
+                            "start_time": start_raw,
+                            "meet_link": event.get("hangoutLink"),
+                            "calendar_link": event.get("htmlLink")
+                        })
                 
                 logger.info(f"📋 Retrieved {len(formatted_events)} events from Google Calendar")
                 return formatted_events
@@ -284,6 +304,49 @@ class DirectGoogleCalendarClient:
         except Exception as e:
             logger.error(f"❌ Error listing Google Calendar events: {e}")
             return []
+    
+    def _format_event_time(self, time_str: str) -> str:
+        """Format Google Calendar datetime string to user-friendly format with proper timezone"""
+        
+        try:
+            import pytz
+            
+            if not time_str:
+                return "Time not specified"
+            
+            # Handle different Google Calendar time formats
+            if 'T' in time_str:
+                # DateTime format: "2025-08-26T15:00:00-04:00" or "2025-08-26T15:00:00Z"
+                if time_str.endswith('Z'):
+                    # UTC time
+                    parsed_time = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+                else:
+                    # Time with timezone offset
+                    parsed_time = datetime.fromisoformat(time_str)
+                
+                # Convert to Eastern Time for consistent display
+                et_tz = pytz.timezone('US/Eastern')
+                if parsed_time.tzinfo is None:
+                    parsed_time = parsed_time.replace(tzinfo=pytz.UTC)
+                
+                et_time = parsed_time.astimezone(et_tz)
+                
+                # Format as "Monday, August 26 at 11:00 AM ET"
+                formatted = et_time.strftime("%A, %B %d at %I:%M %p ET")
+                logger.info(f"🕐 Formatted time: {time_str} -> {formatted}")
+                return formatted
+                
+            else:
+                # Date only format: "2025-08-26"
+                try:
+                    date_obj = datetime.strptime(time_str, '%Y-%m-%d')
+                    return date_obj.strftime("%A, %B %d (All day)")
+                except ValueError:
+                    return time_str  # Return as-is if we can't parse
+                    
+        except Exception as e:
+            logger.warning(f"⚠️ Error formatting time '{time_str}': {e}")
+            return time_str  # Return raw string as fallback
     
     async def check_conflicts(self, start_time: datetime, duration_minutes: int = 60, attendees: Optional[List[str]] = None) -> Dict:
         """Check for scheduling conflicts for proposed meeting time"""

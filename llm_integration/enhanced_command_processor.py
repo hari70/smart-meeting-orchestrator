@@ -1096,32 +1096,148 @@ class LLMCommandProcessor:
             return {"error": f"Failed to create event: {str(e)}"}
     
     async def _tool_list_events(self, input_data: Dict, team_member, db, message_text: str) -> Dict:
-        """List upcoming events"""
+        """List upcoming events from both database and Google Calendar with proper timezone handling"""
         
         try:
             from database.models import Meeting
+            from datetime import timezone as dt_timezone
+            import pytz
             
             days_ahead = input_data.get("days_ahead", 7)
             limit = input_data.get("limit", 5)
             
-            end_date = datetime.now() + timedelta(days=days_ahead)
+            logger.info(f"📋 LISTING EVENTS: Looking {days_ahead} days ahead, limit {limit}")
             
-            meetings = db.query(Meeting).filter(
+            # Get events from Google Calendar first (more authoritative)
+            calendar_events = []
+            try:
+                if hasattr(self.calendar_client, 'list_events'):
+                    calendar_events = await self.calendar_client.list_events(
+                        days_ahead=days_ahead, 
+                        limit=limit
+                    )
+                    logger.info(f"📅 Retrieved {len(calendar_events)} events from Google Calendar")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to get Google Calendar events: {e}")
+            
+            # Also get events from database as backup
+            end_date = datetime.now() + timedelta(days=days_ahead)
+            db_meetings = db.query(Meeting).filter(
                 Meeting.team_id == team_member.team_id,
                 Meeting.scheduled_time > datetime.now(),
                 Meeting.scheduled_time <= end_date
             ).order_by(Meeting.scheduled_time).limit(limit).all()
             
-            if not meetings:
+            logger.info(f"💾 Retrieved {len(db_meetings)} events from database")
+            
+            # Process and format events
+            events = []
+            
+            # Process Google Calendar events with proper timezone handling
+            for event in calendar_events:
+                try:
+                    start_time_str = event.get("start_time", "")
+                    title = event.get("title", "No title")
+                    
+                    # Parse the Google Calendar datetime
+                    if start_time_str:
+                        try:
+                            # Handle different formats from Google Calendar
+                            if 'T' in start_time_str:
+                                # ISO format: "2025-08-26T15:00:00-04:00" or "2025-08-26T15:00:00Z"
+                                if start_time_str.endswith('Z'):
+                                    start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+                                else:
+                                    start_time = datetime.fromisoformat(start_time_str)
+                                
+                                # Convert to ET for display consistency
+                                et_tz = pytz.timezone('US/Eastern')
+                                if start_time.tzinfo is None:
+                                    start_time = start_time.replace(tzinfo=pytz.UTC)
+                                start_time_et = start_time.astimezone(et_tz)
+                                
+                                formatted_time = start_time_et.strftime("%A, %B %d at %I:%M %p ET")
+                                logger.info(f"📅 Formatted Google Calendar event: {title} at {formatted_time}")
+                                
+                                events.append({
+                                    "title": title,
+                                    "start_time": formatted_time,
+                                    "meet_link": event.get("meet_link"),
+                                    "source": "google_calendar"
+                                })
+                            else:
+                                # Date only format
+                                events.append({
+                                    "title": title,
+                                    "start_time": start_time_str,
+                                    "meet_link": event.get("meet_link"),
+                                    "source": "google_calendar"
+                                })
+                        except Exception as parse_error:
+                            logger.warning(f"⚠️ Failed to parse event time '{start_time_str}': {parse_error}")
+                            events.append({
+                                "title": title,
+                                "start_time": start_time_str,  # Use raw string as fallback
+                                "meet_link": event.get("meet_link"),
+                                "source": "google_calendar"
+                            })
+                    else:
+                        events.append({
+                            "title": title,
+                            "start_time": "Time not specified",
+                            "meet_link": event.get("meet_link"),
+                            "source": "google_calendar"
+                        })
+                        
+                except Exception as event_error:
+                    logger.error(f"❌ Error processing calendar event: {event_error}")
+            
+            # Process database events (as backup/supplement)
+            for meeting in db_meetings:
+                try:
+                    # Handle timezone-aware datetime from database
+                    scheduled_time = meeting.scheduled_time
+                    
+                    if scheduled_time:
+                        if scheduled_time.tzinfo is None:
+                            # Assume UTC if no timezone info
+                            scheduled_time = scheduled_time.replace(tzinfo=pytz.UTC)
+                        
+                        # Convert to ET for display consistency
+                        et_tz = pytz.timezone('US/Eastern')
+                        scheduled_time_et = scheduled_time.astimezone(et_tz)
+                        formatted_time = scheduled_time_et.strftime("%A, %B %d at %I:%M %p ET")
+                        
+                        # Check if this event is already in the Google Calendar list
+                        already_listed = any(
+                            e["title"] == meeting.title and 
+                            e["source"] == "google_calendar" 
+                            for e in events
+                        )
+                        
+                        if not already_listed:
+                            events.append({
+                                "title": meeting.title,
+                                "start_time": formatted_time,
+                                "meet_link": meeting.google_meet_link,
+                                "source": "database"
+                            })
+                            logger.info(f"📊 Added database event: {meeting.title} at {formatted_time}")
+                        else:
+                            logger.info(f"📋 Skipped duplicate: {meeting.title} (already in Google Calendar)")
+                            
+                except Exception as db_error:
+                    logger.error(f"❌ Error processing database meeting: {db_error}")
+            
+            # Sort events by start time (best effort)
+            events.sort(key=lambda x: x.get("start_time", "zzz"))
+            
+            if not events:
                 return {"success": True, "events": [], "message": "No upcoming meetings"}
             
-            events = []
-            for meeting in meetings:
-                events.append({
-                    "title": meeting.title,
-                    "time": meeting.scheduled_time.strftime("%A, %B %d at %I:%M %p"),
-                    "meet_link": meeting.google_meet_link
-                })
+            logger.info(f"✅ Final event list: {len(events)} events total")
+            for i, event in enumerate(events):
+                logger.info(f"  {i+1}. {event['title']} - {event['start_time']} ({event['source']})")
             
             return {
                 "success": True,
@@ -1130,6 +1246,7 @@ class LLMCommandProcessor:
             }
             
         except Exception as e:
+            logger.error(f"❌ Failed to list events: {str(e)}", exc_info=True)
             return {"error": f"Failed to list events: {str(e)}"}
     
     async def _tool_find_free_time(self, input_data: Dict, team_member, db, message_text: str) -> Dict:
@@ -1294,19 +1411,22 @@ class LLMCommandProcessor:
                 target_timezone = dt_timezone(local_tz_offset)
                 logger.info(f"🌍 [BULLETPROOF PARSER] Using local timezone: {local_tz_offset}")
             
-            # Look for time indicators in original message
+            # Look for time indicators in original message (with timezone tolerance)
             time_patterns = [
-                (r'(\d{1,2}):(\d{2})\s*(am|pm)', 'hour_minute_ampm'),
-                (r'(\d{1,2})\s*(am|pm)', 'hour_ampm'),
-                (r'(\d{1,2}):(\d{2})', 'hour_minute_24h'),
-                (r'(\d{1,2})\s*pm', 'hour_pm'),
-                (r'(\d{1,2})\s*am', 'hour_am'),
+                (r'(\d{1,2}):(\d{2})\s*(am|pm)(?:\s+(?:et|pt|ct|mt|eastern|pacific|central|mountain))?', 'hour_minute_ampm'),  # 2:30pm ET
+                (r'(\d{1,2})\s*(am|pm)(?:\s+(?:et|pt|ct|mt|eastern|pacific|central|mountain))?', 'hour_ampm'),              # 4pm ET
+                (r'(\d{1,2}):(\d{2})(?:\s+(?:et|pt|ct|mt|eastern|pacific|central|mountain))?', 'hour_minute_24h'),          # 14:30 ET
+                (r'(\d{1,2})\s*pm(?:\s+(?:et|pt|ct|mt|eastern|pacific|central|mountain))?', 'hour_pm'),                    # 4pm ET (fallback)
+                (r'(\d{1,2})\s*am(?:\s+(?:et|pt|ct|mt|eastern|pacific|central|mountain))?', 'hour_am'),                    # 9am ET (fallback)
             ]
             
             time_found = False
+            logger.info(f"🔍 [TIME DEBUG] Looking for time patterns in: '{message_lower}'")
             for pattern, pattern_type in time_patterns:
                 match = re.search(pattern, message_lower)
+                logger.info(f"🔍 [TIME DEBUG] Testing pattern '{pattern}' ({pattern_type}): {match.group(0) if match else 'No match'}")
                 if match:
+                    logger.info(f"🎯 [TIME DEBUG] MATCH FOUND! Pattern: {pattern_type}, Groups: {match.groups()}")
                     if pattern_type == 'hour_minute_ampm':
                         hour = int(match.group(1))
                         minute = int(match.group(2))
