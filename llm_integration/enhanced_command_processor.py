@@ -43,14 +43,14 @@ class LLMCommandProcessor:
         return [
             {
                 "name": "create_calendar_event",
-                "description": "Create a new calendar event. Use this AFTER checking conflicts when user requests scheduling. You can optionally invite family members by including their names in the attendees field.",
+                "description": "Create a new calendar event. Use this AFTER checking conflicts when user requests scheduling. CRITICAL: Extract the EXACT subject/title from the user's message - if they say 'AI Healthcare' use that as the title, not generic terms. You can optionally invite family members by including their names in the attendees field.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "title": {"type": "string", "description": "Event title"},
+                        "title": {"type": "string", "description": "CRITICAL: Extract the EXACT event title/subject from the user's message. If they mention 'AI Healthcare', 'family dinner', 'workout session', etc., use those EXACT words as the title. Do NOT use generic titles like 'Meeting'."},
                         "start_time": {"type": "string", "description": "Start time in ISO format"},
                         "duration_minutes": {"type": "integer", "description": "Duration in minutes", "default": 60},
-                        "attendees": {"type": "array", "items": {"type": "string"}, "description": "Optional: Family member names to invite (leave empty for individual events)"},
+                        "attendees": {"type": "array", "items": {"type": "string"}, "description": "CRITICAL: Extract ALL participant names mentioned in the user's message. Include first names, nicknames, or partial names as mentioned. For 'meeting with Rick and Hari', use ['Rick', 'Hari']. Do NOT leave this empty if people are mentioned."},
                         "description": {"type": "string", "description": "Event description"}
                     },
                     "required": ["title", "start_time"]
@@ -392,9 +392,12 @@ class LLMCommandProcessor:
                             break
                     
                     if last_conflict_input:
-                        # Force create the event with the same timing
+                        # Extract proper title from message instead of generic title
+                        extracted_title = self._extract_meeting_title_from_message(message_text)
+                        
+                        # Force create the event with proper title
                         forced_event_input = {
-                            "title": f"Meeting for {message_text[:30]}...",  # Extract from message
+                            "title": extracted_title,  # Use extracted subject
                             "start_time": last_conflict_input['start_time'],
                             "duration_minutes": last_conflict_input.get('duration_minutes', 60),
                             "description": f"Auto-created from: {message_text}"
@@ -1209,6 +1212,12 @@ class LLMCommandProcessor:
             logger.info(f"🔍 [BULLETPROOF PARSER] Analyzing original message: '{message_lower}'")
             
             # STEP 3: Determine target date using simple, foolproof logic
+            from datetime import timezone as dt_timezone
+            import time
+            
+            # Get current time in local timezone
+            now = datetime.now()
+            
             if "tomorrow" in message_lower:
                 target_date = (now + timedelta(days=1)).date()
                 logger.info(f"📅 [BULLETPROOF PARSER] TOMORROW detected: {target_date} ({target_date.strftime('%A')})")
@@ -1332,18 +1341,16 @@ class LLMCommandProcessor:
             
             # STEP 5: Combine date and time with timezone awareness
             try:
-                from datetime import timezone as dt_timezone
-                import time
-                
-                # Create timezone-aware datetime
-                result = datetime.combine(target_date, datetime.min.time().replace(hour=target_hour, minute=target_minute))
-                
-                # Add timezone info - get system timezone offset
+                # Create timezone-aware datetime using local system timezone
                 local_offset = time.timezone if not time.daylight else time.altzone
                 local_tz_offset = timedelta(seconds=-local_offset)
-                result = result.replace(tzinfo=dt_timezone(local_tz_offset))
+                local_tz = dt_timezone(local_tz_offset)
+                
+                result = datetime.combine(target_date, datetime.min.time().replace(hour=target_hour, minute=target_minute))
+                result = result.replace(tzinfo=local_tz)
                 
                 logger.info(f"✅ [BULLETPROOF PARSER] FINAL RESULT (timezone-aware): {result.strftime('%A, %B %d, %Y at %I:%M %p %Z')}")
+                logger.info(f"🕰️ [BULLETPROOF PARSER] Local timezone offset: {local_tz_offset}")
                 
                 # STEP 6: Verification check
                 if "tomorrow" in message_lower:
@@ -1360,11 +1367,12 @@ class LLMCommandProcessor:
             except ValueError as e:
                 logger.error(f"❌ [BULLETPROOF PARSER] Invalid time: hour={target_hour}, minute={target_minute}, error={e}")
                 # Fallback to 7 PM with timezone
-                result = datetime.combine(target_date, datetime.min.time().replace(hour=19, minute=0))
-                # Add timezone info
                 local_offset = time.timezone if not time.daylight else time.altzone
                 local_tz_offset = timedelta(seconds=-local_offset)
-                result = result.replace(tzinfo=dt_timezone(local_tz_offset))
+                local_tz = dt_timezone(local_tz_offset)
+                
+                result = datetime.combine(target_date, datetime.min.time().replace(hour=19, minute=0))
+                result = result.replace(tzinfo=local_tz)
                 logger.warning(f"⚠️ [BULLETPROOF PARSER] Using fallback time (timezone-aware): {result}")
                 return result
                 
@@ -1374,13 +1382,91 @@ class LLMCommandProcessor:
             from datetime import timezone as dt_timezone
             import time
             
-            fallback = datetime.combine((now + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
-            # Add timezone info
+            now = datetime.now()
             local_offset = time.timezone if not time.daylight else time.altzone
             local_tz_offset = timedelta(seconds=-local_offset)
-            fallback = fallback.replace(tzinfo=dt_timezone(local_tz_offset))
+            local_tz = dt_timezone(local_tz_offset)
+            
+            fallback = datetime.combine((now + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
+            fallback = fallback.replace(tzinfo=local_tz)
             logger.warning(f"🆘 [BULLETPROOF PARSER] Ultimate fallback (timezone-aware): {fallback}")
             return fallback
+    
+    def _extract_meeting_title_from_message(self, message: str) -> str:
+        """Extract meeting title/subject from SMS message using better patterns"""
+        message_lower = message.lower().strip()
+        
+        # Pattern 1: "Schedule a meeting with X about Y"
+        about_pattern = r'(?:schedule|meeting|call).*?(?:about|subject:|topic:)\s+([^\s]+(?:\s+[^\s]+)*?)(?:\s+(?:tomorrow|today|this|next|at|with|\d)|\.?$)'
+        match = re.search(about_pattern, message_lower, re.IGNORECASE)
+        if match:
+            title = match.group(1).strip().title()
+            logger.info(f"📝 [TITLE EXTRACTION] Found title via 'about' pattern: '{title}'")
+            return title
+        
+        # Pattern 2: "Schedule a meeting for Y"
+        for_pattern = r'(?:schedule|meeting|call).*?for\s+([^\s]+(?:\s+[^\s]+)*?)(?:\s+(?:tomorrow|today|this|next|at|with|\d)|\.?$)'
+        match = re.search(for_pattern, message_lower, re.IGNORECASE)
+        if match:
+            title = match.group(1).strip().title()
+            logger.info(f"📝 [TITLE EXTRACTION] Found title via 'for' pattern: '{title}'")
+            return title
+        
+        # Pattern 3: Look for quoted subjects
+        quote_pattern = r'["\']([^"\']++)["\']'
+        match = re.search(quote_pattern, message)
+        if match:
+            title = match.group(1).strip()
+            logger.info(f"📝 [TITLE EXTRACTION] Found quoted title: '{title}'")
+            return title
+        
+        # Pattern 4: Extract capitalized phrases that might be subjects
+        words = message.split()
+        capitalized_phrases = []
+        current_phrase = []
+        
+        for word in words:
+            # Skip common scheduling words
+            if word.lower() in ['schedule', 'meeting', 'call', 'with', 'about', 'tomorrow', 'today', 'at', 'pm', 'am', 'and', 'the', 'a', 'an']:
+                if current_phrase:
+                    capitalized_phrases.append(' '.join(current_phrase))
+                    current_phrase = []
+                continue
+            
+            # Check if word looks like a subject word (capitalized or contains meaningful content)
+            if word[0].isupper() or any(char.isalpha() for char in word):
+                current_phrase.append(word)
+            else:
+                if current_phrase:
+                    capitalized_phrases.append(' '.join(current_phrase))
+                    current_phrase = []
+        
+        if current_phrase:
+            capitalized_phrases.append(' '.join(current_phrase))
+        
+        # Find the most likely subject (longest meaningful phrase)
+        for phrase in sorted(capitalized_phrases, key=len, reverse=True):
+            if len(phrase) > 2 and not phrase.lower() in ['hari', 'sundar', 'rick']:  # Skip names only
+                logger.info(f"📝 [TITLE EXTRACTION] Found capitalized phrase: '{phrase}'")
+                return phrase
+        
+        # Fallback: try to find any meaningful words
+        meaningful_words = []
+        for word in words:
+            if (len(word) > 2 and 
+                word.lower() not in ['schedule', 'meeting', 'call', 'with', 'about', 'tomorrow', 'today', 'at', 'the', 'and', 'a', 'an'] and
+                not re.match(r'^\d+', word) and  # Skip times
+                not word.lower() in ['hari', 'sundar', 'thangavel', 'manickam']):
+                meaningful_words.append(word)
+        
+        if meaningful_words:
+            title = ' '.join(meaningful_words[:3])  # Take first 3 meaningful words
+            logger.info(f"📝 [TITLE EXTRACTION] Using meaningful words: '{title}'")
+            return title.title()
+        
+        # Final fallback
+        logger.warning(f"📝 [TITLE EXTRACTION] No good title found, using fallback: 'Meeting'")
+        return "Meeting"
     
     async def _get_team_context(self, team_member, db) -> Dict:
         """Get team context for LLM"""
