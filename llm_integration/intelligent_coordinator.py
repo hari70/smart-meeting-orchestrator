@@ -581,24 +581,18 @@ If someone says "schedule a meeting", actually create the calendar event."""
             duration = new_duration or meeting.duration_minutes or 60
             conflicts = await self.calendar_client.check_conflicts(
                 start_time=new_start_time,
-                duration_minutes=duration
+                duration_minutes=duration,
+                exclude_meeting_title=meeting.title  # CRITICAL: Exclude the meeting being moved
             )
             
-            # Filter out the meeting being rescheduled from conflicts
+            # Check for conflicts - calendar client will exclude the meeting being rescheduled
             if conflicts.get("has_conflicts"):
                 conflict_list = conflicts.get("conflicts", [])
-                # Remove the current meeting from conflicts (it's expected to be there)
-                filtered_conflicts = [
-                    c for c in conflict_list 
-                    if c.get("title", "").lower() != meeting.title.lower()
-                ]
-                
-                if filtered_conflicts:
-                    conflict_names = [c.get("title", "Meeting") for c in filtered_conflicts]
-                    return {
-                        "success": False,
-                        "error": f"❌ Conflict at new time with: {', '.join(conflict_names)}. Choose a different time."
-                    }
+                conflict_names = [c.get("title", "Meeting") for c in conflict_list]
+                return {
+                    "success": False,
+                    "error": f"❌ Conflict at new time with: {', '.join(conflict_names)}. Choose a different time."
+                }
             
             # Update the meeting using MCP tools
             if meeting.google_calendar_event_id:  # type: ignore

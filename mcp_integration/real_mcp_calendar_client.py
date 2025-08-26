@@ -207,7 +207,8 @@ class RealMCPCalendarClient:
             logger.error(f"❌ Error deleting MCP event: {e}")
             return False
     
-    async def check_conflicts(self, start_time: datetime, duration_minutes: int = 60, attendees: Optional[List[str]] = None) -> Dict:
+    async def check_conflicts(self, start_time: datetime, duration_minutes: int = 60, 
+                            attendees: Optional[List[str]] = None, exclude_meeting_title: Optional[str] = None) -> Dict:
         """
         Check for scheduling conflicts using real MCP tools
         """
@@ -240,8 +241,15 @@ class RealMCPCalendarClient:
                     # Check if this is already formatted (from DirectGoogleCalendarClient fallback)
                     if "start_time" in event and not isinstance(event.get("start"), dict):
                         # Already formatted by DirectGoogleCalendarClient - use as-is
+                        event_title = event.get("title", "Busy")
+                        
+                        # Skip the meeting being rescheduled
+                        if exclude_meeting_title and event_title.lower() == exclude_meeting_title.lower():
+                            logger.info(f"🔄 Skipping meeting being rescheduled: {event_title}")
+                            continue
+                            
                         conflicts.append({
-                            "title": event.get("title", "Busy"),
+                            "title": event_title,
                             "start": event.get("start_time"),
                             "end": "N/A",  # DirectGoogleCalendarClient doesn't provide end time
                             "calendar_link": event.get("calendar_link")
@@ -250,9 +258,15 @@ class RealMCPCalendarClient:
                         # Raw Google Calendar API format
                         event_start = event["start"].get("dateTime", event["start"].get("date"))
                         event_end = event["end"].get("dateTime", event["end"].get("date"))
+                        event_title = event.get("summary", "Busy")
+                        
+                        # Skip the meeting being rescheduled
+                        if exclude_meeting_title and event_title.lower() == exclude_meeting_title.lower():
+                            logger.info(f"🔄 Skipping meeting being rescheduled: {event_title}")
+                            continue
                         
                         conflicts.append({
-                            "title": event.get("summary", "Busy"),
+                            "title": event_title,
                             "start": event_start,
                             "end": event_end,
                             "calendar_link": event.get("htmlLink")
