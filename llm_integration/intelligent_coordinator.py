@@ -134,17 +134,22 @@ CURRENT CONTEXT:
 - Team: {context.get('team_name', 'Family')}
 
 YOUR ROLE:
-You coordinate meetings through SMS. When users ask you to do something, you USE TOOLS to actually do it.
+You coordinate meetings through SMS using REAL Google Calendar MCP tools.
 
-CRITICAL RULES:
-1. For scheduling requests → USE create_calendar_event tool
-2. For calendar questions → USE list_calendar_events tool  
-3. For availability → USE check_calendar_conflicts tool
-4. For moving meetings → USE reschedule_meeting tool
-5. For canceling meetings → USE cancel_meeting tool
-6. For updating meeting details → USE update_meeting tool
-7. For timezone confusion → ASK for clarification but PRESERVE context
-8. For follow-up rescheduling → MAINTAIN context about which meeting is being moved
+CRITICAL WORKFLOW:
+1. For scheduling requests → Use parse_time_expression first, then google-calendar:create_gcal_event
+2. For calendar questions → Use google-calendar:list_gcal_events
+3. For finding meetings → Use google-calendar:search_gcal_events
+4. For moving meetings → Use google-calendar:search_gcal_events to find, then google-calendar:update_gcal_event
+5. For canceling meetings → Use google-calendar:search_gcal_events to find, then google-calendar:delete_gcal_event
+6. For timezone confusion → Use ask_for_clarification but PRESERVE context
+
+TOOL USAGE RULES:
+- ALWAYS use parse_time_expression before creating/updating events
+- When searching for meetings, use the meeting title as the search query
+- For rescheduling: search → get event_id → update with new time
+- Pass calendar_id="primary" for all Google Calendar tools
+- Use time_zone="America/New_York" as default
 
 CONTEXT AWARENESS:
 - If user says "how about 2pm" after trying to reschedule, they mean reschedule the SAME meeting
@@ -152,167 +157,235 @@ CONTEXT AWARENESS:
 - Don't ask "what meeting" if context is clear from conversation
 
 TIMEZONE HANDLING:
-If time zone is ambiguous (like "4pm"), ask: "Do you mean 4pm Eastern Time?"
-But REMEMBER what they're trying to schedule and complete it once clarified.
+- If time zone is ambiguous (like "4pm"), ask: "Do you mean 4pm Eastern Time?"
+- But REMEMBER what they're trying to schedule and complete it once clarified
+- Always include timezone in time expressions when parsing
+
+EXAMPLE WORKFLOWS:
+
+Create Meeting:
+1. parse_time_expression("tomorrow at 4pm ET", 60)
+2. google-calendar:create_gcal_event with parsed ISO times
+
+Reschedule Meeting:
+1. google-calendar:search_gcal_events("AI Talk")
+2. parse_time_expression("Friday at 3pm ET", 60) 
+3. google-calendar:update_gcal_event with event_id and new times
+
+List Events:
+1. Calculate time_min/time_max in ISO format
+2. google-calendar:list_gcal_events with time range
 
 RESPONSE STYLE:
 - Direct and helpful
 - Use tools to take action
-- Ask for clarification when truly needed
 - Keep responses under 160 characters when possible (SMS)
-
-TOOL USAGE:
-You MUST use tools for any actionable request. Don't just respond conversationally.
-If someone says "schedule a meeting", actually create the calendar event."""
+- Don't just respond conversationally - USE THE TOOLS!"""
 
     def _get_mcp_tools(self) -> List[Dict]:
         """
-        Define clean MCP tools for Claude
+        Define REAL MCP Google Calendar tools for Claude to use directly
         
-        Simplified, focused tools that actually work
+        These map to your actual 8 MCP Google Calendar tools
         """
         return [
             {
-                "name": "create_calendar_event",
-                "description": "Create a real calendar event with Google Meet link",
+                "name": "google-calendar:create_gcal_event",
+                "description": "Create a Google Calendar event with Google Meet link",
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "title": {
+                        "calendar_id": {
+                            "type": "string",
+                            "description": "Calendar ID",
+                            "default": "primary"
+                        },
+                        "summary": {
                             "type": "string", 
                             "description": "Meeting title/subject"
                         },
-                        "when": {
+                        "start": {
                             "type": "string",
-                            "description": "When to schedule (e.g., 'tomorrow at 4pm', 'Friday at 2pm ET')"
+                            "description": "Start time in ISO format (e.g., '2025-08-29T15:00:00-04:00')"
                         },
-                        "duration_minutes": {
-                            "type": "integer",
-                            "description": "Duration in minutes",
-                            "default": 60
+                        "end": {
+                            "type": "string",
+                            "description": "End time in ISO format (e.g., '2025-08-29T16:00:00-04:00')"
+                        },
+                        "time_zone": {
+                            "type": "string",
+                            "description": "Timezone",
+                            "default": "America/New_York"
                         },
                         "attendees": {
                             "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Who to invite (names or emails)"
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "email": {"type": "string"}
+                                }
+                            },
+                            "description": "List of attendee email objects"
                         },
                         "description": {
                             "type": "string",
-                            "description": "Optional meeting description"
+                            "description": "Meeting description"
                         }
                     },
-                    "required": ["title", "when"]
+                    "required": ["summary", "start", "end"]
                 }
             },
             {
-                "name": "list_calendar_events",
-                "description": "List upcoming calendar events",
+                "name": "google-calendar:list_gcal_events",
+                "description": "List Google Calendar events",
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "days_ahead": {
+                        "calendar_id": {
+                            "type": "string",
+                            "description": "Calendar ID",
+                            "default": "primary"
+                        },
+                        "time_min": {
+                            "type": "string",
+                            "description": "Minimum time (ISO format with Z)"
+                        },
+                        "time_max": {
+                            "type": "string",
+                            "description": "Maximum time (ISO format with Z)"
+                        },
+                        "max_results": {
                             "type": "integer",
-                            "description": "How many days to look ahead",
-                            "default": 7
-                        },
-                        "today_only": {
-                            "type": "boolean",
-                            "description": "Only show today's events",
-                            "default": False
-                        }
-                    }
-                }
-            },
-            {
-                "name": "check_calendar_conflicts",
-                "description": "Check if a time slot is available",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "when": {
-                            "type": "string",
-                            "description": "Time to check (e.g., 'tomorrow at 4pm ET')"
-                        },
-                        "duration_minutes": {
-                            "type": "integer",
-                            "description": "Duration to check",
-                            "default": 60
+                            "description": "Maximum number of events",
+                            "default": 10
                         }
                     },
-                    "required": ["when"]
+                    "required": ["calendar_id"]
                 }
             },
             {
-                "name": "reschedule_meeting",
-                "description": "Move an existing meeting to a new date/time",
+                "name": "google-calendar:update_gcal_event",
+                "description": "Update an existing Google Calendar event",
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "meeting_identifier": {
+                        "calendar_id": {
                             "type": "string",
-                            "description": "Meeting title or description to identify which meeting to move"
+                            "description": "Calendar ID",
+                            "default": "primary"
                         },
-                        "new_when": {
+                        "event_id": {
                             "type": "string",
-                            "description": "New date/time (e.g., 'Friday at 3pm ET', 'tomorrow at 10am')"
+                            "description": "Event ID to update"
                         },
-                        "duration_minutes": {
-                            "type": "integer",
-                            "description": "New duration if different",
-                            "default": None
-                        }
-                    },
-                    "required": ["meeting_identifier", "new_when"]
-                }
-            },
-            {
-                "name": "cancel_meeting",
-                "description": "Cancel an existing meeting",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "meeting_identifier": {
-                            "type": "string",
-                            "description": "Meeting title or description to identify which meeting to cancel"
-                        },
-                        "reason": {
-                            "type": "string",
-                            "description": "Optional reason for cancellation"
-                        }
-                    },
-                    "required": ["meeting_identifier"]
-                }
-            },
-            {
-                "name": "update_meeting",
-                "description": "Update meeting details (title, attendees, description)",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "meeting_identifier": {
-                            "type": "string",
-                            "description": "Meeting title or description to identify which meeting to update"
-                        },
-                        "new_title": {
+                        "summary": {
                             "type": "string",
                             "description": "New meeting title"
                         },
-                        "add_attendees": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Attendees to add"
-                        },
-                        "remove_attendees": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Attendees to remove"
-                        },
-                        "new_description": {
+                        "start": {
                             "type": "string",
-                            "description": "New meeting description"
+                            "description": "New start time in ISO format"
+                        },
+                        "end": {
+                            "type": "string",
+                            "description": "New end time in ISO format"
+                        },
+                        "time_zone": {
+                            "type": "string",
+                            "description": "Timezone",
+                            "default": "America/New_York"
                         }
                     },
-                    "required": ["meeting_identifier"]
+                    "required": ["event_id"]
+                }
+            },
+            {
+                "name": "google-calendar:delete_gcal_event",
+                "description": "Delete a Google Calendar event",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "calendar_id": {
+                            "type": "string",
+                            "description": "Calendar ID",
+                            "default": "primary"
+                        },
+                        "event_id": {
+                            "type": "string",
+                            "description": "Event ID to delete"
+                        }
+                    },
+                    "required": ["event_id"]
+                }
+            },
+            {
+                "name": "google-calendar:fetch_gcal_event",
+                "description": "Get details of a specific Google Calendar event",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "calendar_id": {
+                            "type": "string",
+                            "description": "Calendar ID",
+                            "default": "primary"
+                        },
+                        "event_id": {
+                            "type": "string",
+                            "description": "Event ID to fetch"
+                        }
+                    },
+                    "required": ["event_id"]
+                }
+            },
+            {
+                "name": "google-calendar:search_gcal_events",
+                "description": "Search for Google Calendar events by query",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "calendar_id": {
+                            "type": "string",
+                            "description": "Calendar ID",
+                            "default": "primary"
+                        },
+                        "q": {
+                            "type": "string",
+                            "description": "Search query (event title, description, etc.)"
+                        },
+                        "time_min": {
+                            "type": "string",
+                            "description": "Minimum time (ISO format with Z)"
+                        },
+                        "time_max": {
+                            "type": "string",
+                            "description": "Maximum time (ISO format with Z)"
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of events",
+                            "default": 10
+                        }
+                    },
+                    "required": ["q"]
+                }
+            },
+            {
+                "name": "parse_time_expression",
+                "description": "Helper tool to parse natural language time expressions into ISO format",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "time_expression": {
+                            "type": "string",
+                            "description": "Natural language time (e.g., 'tomorrow at 4pm ET', 'Friday at 3pm')"
+                        },
+                        "duration_minutes": {
+                            "type": "integer",
+                            "description": "Duration in minutes for end time calculation",
+                            "default": 60
+                        }
+                    },
+                    "required": ["time_expression"]
                 }
             },
             {
@@ -367,38 +440,183 @@ If someone says "schedule a meeting", actually create the calendar event."""
     
     async def _execute_tool(self, tool_name: str, tool_input: Dict, user, db: Session) -> Dict:
         """
-        Execute MCP tools cleanly
+        Execute REAL MCP Google Calendar tools directly
         
-        Each tool does ONE thing well
+        No more wrapper logic - direct MCP tool execution
         """
         try:
-            if tool_name == "create_calendar_event":
-                return await self._tool_create_event(tool_input, user, db)
+            # Parse time expressions first if needed
+            if tool_name == "parse_time_expression":
+                return await self._tool_parse_time(tool_input)
                 
-            elif tool_name == "list_calendar_events":
-                return await self._tool_list_events(tool_input, user, db)
-                
-            elif tool_name == "check_calendar_conflicts":
-                return await self._tool_check_conflicts(tool_input, user, db)
-                
-            elif tool_name == "reschedule_meeting":
-                return await self._tool_reschedule_meeting(tool_input, user, db)
-                
-            elif tool_name == "cancel_meeting":
-                return await self._tool_cancel_meeting(tool_input, user, db)
-                
-            elif tool_name == "update_meeting":
-                return await self._tool_update_meeting(tool_input, user, db)
-                
+            # Ask for clarification
             elif tool_name == "ask_for_clarification":
                 return await self._tool_ask_clarification(tool_input, user, db)
+            
+            # All Google Calendar MCP tools - delegate to calendar client
+            elif tool_name.startswith("google-calendar:"):
+                return await self._execute_mcp_tool(tool_name, tool_input)
                 
             else:
                 return {"success": False, "error": f"Unknown tool: {tool_name}"}
                 
         except Exception as e:
             logger.error(f"❌ Tool {tool_name} failed: {e}")
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": str(e)"}
+    
+    async def _execute_mcp_tool(self, tool_name: str, tool_input: Dict) -> Dict:
+        """
+        Execute real MCP Google Calendar tools via the calendar client
+        """
+        try:
+            logger.info(f"🔧 Executing real MCP tool: {tool_name}")
+            
+            # Use the RealMCPCalendarClient to execute the tool
+            result = await self.calendar_client._call_mcp_tool(tool_name, tool_input)
+            
+            if result and not result.get("error"):
+                # Format success response based on tool type
+                if tool_name == "google-calendar:create_gcal_event":
+                    title = result.get("summary", "Meeting")
+                    start_time = result.get("start", {}).get("dateTime", "")
+                    meet_link = result.get("hangoutLink", "")
+                    
+                    # Parse and format the time
+                    if start_time:
+                        try:
+                            dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                            formatted_time = dt.strftime('%A at %I:%M %p ET')
+                        except:
+                            formatted_time = start_time
+                    else:
+                        formatted_time = "scheduled"
+                    
+                    meet_text = f" Meet: {meet_link}" if meet_link else ""
+                    message = f"✅ {title} scheduled for {formatted_time}!{meet_text}"
+                    
+                elif tool_name == "google-calendar:list_gcal_events":
+                    events = result.get("items", []) or result.get("events", [])
+                    if not events:
+                        message = "📅 No meetings found"
+                    else:
+                        event_list = []
+                        for event in events[:5]:  # Limit for SMS
+                            title = event.get("summary", event.get("title", "Meeting"))
+                            start = event.get("start", {})
+                            start_time = start.get("dateTime") if isinstance(start, dict) else event.get("start_time")
+                            
+                            if start_time:
+                                try:
+                                    if isinstance(start_time, str) and 'T' in start_time:
+                                        dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                                        time_str = dt.strftime('%a %m/%d %I:%M%p')
+                                    else:
+                                        time_str = str(start_time)
+                                except:
+                                    time_str = str(start_time)
+                            else:
+                                time_str = "TBD"
+                            
+                            event_list.append(f"• {title} - {time_str}")
+                        
+                        message = f"📅 Upcoming meetings:\n{chr(10).join(event_list)}"
+                
+                elif tool_name == "google-calendar:update_gcal_event":
+                    title = result.get("summary", "Meeting")
+                    message = f"✅ {title} has been rescheduled!"
+                    
+                elif tool_name == "google-calendar:delete_gcal_event":
+                    message = "✅ Meeting canceled"
+                    
+                elif tool_name == "google-calendar:search_gcal_events":
+                    events = result.get("items", [])
+                    if not events:
+                        message = "🔍 No matching meetings found"
+                    else:
+                        # Return the events for use in next step
+                        return {
+                            "success": True,
+                            "message": f"Found {len(events)} matching events",
+                            "events": events
+                        }
+                        
+                else:
+                    # Generic success for other tools
+                    message = f"✅ {tool_name.replace('google-calendar:', '').replace('_', ' ').title()} completed"
+                
+                return {
+                    "success": True,
+                    "message": message,
+                    "data": result
+                }
+            else:
+                error_msg = result.get("error", "Unknown error") if result else "No response"
+                return {
+                    "success": False,
+                    "error": f"MCP tool failed: {error_msg}"
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ MCP tool execution failed: {e}")
+            return {
+                "success": False,
+                "error": f"Tool execution failed: {str(e)}"
+            }
+    
+    async def _tool_parse_time(self, input_data: Dict) -> Dict:
+        """
+        Parse natural language time expressions into ISO format
+        """
+        try:
+            time_expression = input_data["time_expression"]
+            duration_minutes = input_data.get("duration_minutes", 60)
+            
+            # Use our existing time parsing logic
+            start_time = await self._parse_when(time_expression)
+            
+            if not start_time:
+                return {
+                    "success": False,
+                    "error": f"Could not parse time expression: {time_expression}"
+                }
+            
+            end_time = start_time + timedelta(minutes=duration_minutes)
+            
+            return {
+                "success": True,
+                "message": f"Parsed '{time_expression}' as {start_time.strftime('%A, %B %d at %I:%M %p ET')}",
+                "start_iso": start_time.isoformat(),
+                "end_iso": end_time.isoformat(),
+                "start_time": start_time,
+                "end_time": end_time
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Time parsing failed: {e}")
+            return {
+                "success": False,
+                "error": f"Time parsing failed: {str(e)}"
+            }
+    
+    async def _tool_ask_clarification(self, input_data: Dict, user, db: Session) -> Dict:
+        """
+        Ask for clarification while preserving context
+        """
+        try:
+            question = input_data["question"]
+            context_to_preserve = input_data.get("context_to_preserve", {})
+            
+            # Store the context for when they respond
+            await self._store_pending_context(user, context_to_preserve, db)
+            
+            return {
+                "success": True,
+                "message": question
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Ask clarification failed: {e}")
+            return {"success": False, "error": "Failed to ask clarification"}
     
     async def _tool_create_event(self, input_data: Dict, user, db: Session) -> Dict:
         """
