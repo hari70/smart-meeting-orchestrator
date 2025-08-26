@@ -101,6 +101,7 @@ class LLMCommandProcessor:
                         "proposed_time": {"type": "string", "description": "Proposed meeting time to check against workouts"},
                         "limit": {"type": "integer", "description": "Number of recent activities to analyze", "default": 7}
                     }
+                }
             },
             {
                 "name": "create_calendar_event_with_emails",

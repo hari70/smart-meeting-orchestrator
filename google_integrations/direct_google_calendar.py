@@ -64,7 +64,7 @@ class DirectGoogleCalendarClient:
         return False
     
     async def create_event(self, title: str, start_time: datetime, duration_minutes: int = 60, 
-                          attendees: List[str] = None, meet_link: str = None) -> Optional[Dict]:
+                          attendees: Optional[List[str]] = None, meet_link: Optional[str] = None) -> Optional[Dict]:
         """Create real Google Calendar event via API with improved token handling"""
         
         if not self.enabled:
@@ -147,7 +147,7 @@ class DirectGoogleCalendarClient:
             params = {"conferenceDataVersion": 1} if not meet_link else {}
             
             logger.info(f"🌐 Making API call to: {url}")
-            logger.info(f"🔑 Using access token: {self.access_token[:20]}...")
+            logger.info(f"🔑 Using access token: {self.access_token[:20] if self.access_token else 'None'}...")
             
             response = requests.post(
                 url,
@@ -285,7 +285,7 @@ class DirectGoogleCalendarClient:
             logger.error(f"❌ Error listing Google Calendar events: {e}")
             return []
     
-    async def check_conflicts(self, start_time: datetime, duration_minutes: int = 60, attendees: List[str] = None) -> Dict:
+    async def check_conflicts(self, start_time: datetime, duration_minutes: int = 60, attendees: Optional[List[str]] = None) -> Dict:
         """Check for scheduling conflicts for proposed meeting time"""
         
         if not self.enabled:
@@ -358,7 +358,7 @@ class DirectGoogleCalendarClient:
             logger.error(f"❌ Error checking conflicts: {e}")
             return {"conflicts": [], "has_conflicts": False, "message": f"Error: {str(e)}"}
     
-    async def find_free_time(self, duration_minutes: int = 60, days_ahead: int = 7, preferred_hours: List[int] = None) -> Optional[datetime]:
+    async def find_free_time(self, duration_minutes: int = 60, days_ahead: int = 7, preferred_hours: Optional[List[int]] = None) -> Optional[datetime]:
         """Find next available free time slot"""
         
         if not self.enabled:
@@ -561,7 +561,7 @@ class DirectGoogleCalendarClient:
             logger.error(f"❌ Error refreshing token: {e}")
             return False
     
-    def _mock_event_response(self, title: str, start_time: datetime, duration_minutes: int, meet_link: str) -> Dict:
+    def _mock_event_response(self, title: str, start_time: datetime, duration_minutes: int, meet_link: Optional[str]) -> Dict:
         """Return mock response when API not configured"""
         
         logger.info(f"📝 [MOCK MODE] Would create: {title} at {start_time.strftime('%A, %B %d at %I:%M %p')}")
