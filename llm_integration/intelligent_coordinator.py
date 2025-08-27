@@ -475,7 +475,7 @@ RESPONSE STYLE:
                 
         except Exception as e:
             logger.error(f"❌ Tool {tool_name} failed: {e}")
-            return {"success": False, "error": str(e)"}
+            return {"success": False, "error": str(e)}
     
     async def _execute_mcp_tool(self, tool_name: str, tool_input: Dict) -> Dict:
         """

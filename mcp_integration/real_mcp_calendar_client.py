@@ -651,10 +651,6 @@ Execute the tool now."""
         
         logger.error(f"❌ Could not call MCP tool: {tool_name} - No fallback available")
         return {"error": f"MCP tool {tool_name} not available - ensure your 8 MCP Google Calendar tools are properly connected"}
-            
-        except Exception as e:
-            logger.error(f"❌ Error calling MCP tool {tool_name}: {e}")
-            return {"error": str(e)}
     
     def get_available_tools(self) -> List[str]:
         """Get list of available MCP Google Calendar tools"""
