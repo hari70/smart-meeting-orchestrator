@@ -1,0 +1,78 @@
+"""Application layer: Modern command processor using patterns."""
+import logging
+from typing import Dict, Any, Optional
+from sqlalchemy.orm import Session
+from database.models import TeamMember
+from app.domain.intent_classifier import IntentClassifier, default_classifier
+from app.application.handlers import (
+    ScheduleMeetingHandler, ListMeetingsHandler, 
+    CancelMeetingHandler, GeneralQueryHandler
+)
+from app.infrastructure.repositories import SqlAlchemyMeetingRepository, SqlAlchemyTeamRepository
+
+logger = logging.getLogger(__name__)
+
+
+class ModernCommandProcessor:
+    """Modern command processor using Strategy and Command patterns."""
+    
+    def __init__(self, sms_client, calendar_client, meet_client, 
+                 intent_classifier: Optional[IntentClassifier] = None):
+        self.sms_client = sms_client
+        self.calendar_client = calendar_client
+        self.meet_client = meet_client
+        
+        # Use provided classifier or default
+        self.intent_classifier = intent_classifier or default_classifier
+        
+        # Initialize repositories (dependency injection)
+        self._meeting_repo = None
+        self._team_repo = None
+        
+        # Initialize handlers
+        self._handlers = {}
+    
+    def _get_repositories(self, db: Session):
+        """Lazy initialization of repositories."""
+        if self._meeting_repo is None:
+            self._meeting_repo = SqlAlchemyMeetingRepository(db)
+            self._team_repo = SqlAlchemyTeamRepository(db)
+        return self._meeting_repo, self._team_repo
+    
+    def _get_handler(self, intent: str, db: Session):
+        """Get or create handler for intent."""
+        if intent not in self._handlers:
+            meeting_repo, team_repo = self._get_repositories(db)
+            
+            if intent == "schedule_meeting":
+                self._handlers[intent] = ScheduleMeetingHandler(
+                    meeting_repo, team_repo, self.calendar_client, self.meet_client
+                )
+            elif intent == "list_meetings":
+                self._handlers[intent] = ListMeetingsHandler(meeting_repo)
+            elif intent == "cancel_meeting":
+                self._handlers[intent] = CancelMeetingHandler(meeting_repo, self.calendar_client)
+            else:
+                self._handlers[intent] = GeneralQueryHandler()
+        
+        return self._handlers[intent]
+    
+    async def process_command(self, message_text: str, team_member: TeamMember, 
+                            conversation, db: Session) -> str:
+        """Process command using modern architecture."""
+        try:
+            intent = self.intent_classifier.classify(message_text)
+            logger.info(f"[MODERN_CMD] {intent} from {team_member.name}")
+            
+            handler = self._get_handler(intent, db)
+            return await handler.handle(message_text, team_member, db)
+            
+        except Exception as e:
+            logger.error(f"Modern command error: {e}")
+            return "Sorry, I encountered an error processing your request. Please try again."
+    
+    # Legacy compatibility method
+    async def process_command_with_llm(self, message_text: str, team_member: TeamMember, 
+                                     conversation, db: Session) -> str:
+        """Legacy compatibility - delegates to process_command."""
+        return await self.process_command(message_text, team_member, conversation, db)
