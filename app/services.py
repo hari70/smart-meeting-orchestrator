@@ -38,10 +38,20 @@ meet_client = GoogleMeetClient()
 logger.info("🔗 Meet client initialized")
 
 # NEW: Clean Architecture - Modern Command Processor
-command_processor = ModernCommandProcessor(
-    calendar_client=calendar_client,
-    meet_client=meet_client, 
-    sms_client=surge_client
-)
-
-logger.info("🤖 Modern Command Processor ready - Clean Architecture with Strategy/Command patterns")
+try:
+    command_processor = ModernCommandProcessor(
+        calendar_client=calendar_client,
+        meet_client=meet_client, 
+        sms_client=surge_client
+    )
+    logger.info("🤖 Modern Command Processor ready - Clean Architecture with Strategy/Command patterns")
+except Exception as e:
+    logger.warning(f"⚠️  Failed to initialize ModernCommandProcessor: {e}. Falling back to basic processor.")
+    # Fallback to a simple processor
+    class FallbackCommandProcessor:
+        async def process_command(self, *args, **kwargs):
+            return "Service temporarily unavailable. Please try again later."
+        async def process_command_with_llm(self, *args, **kwargs):
+            return "Service temporarily unavailable. Please try again later."
+    
+    command_processor = FallbackCommandProcessor()
