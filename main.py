@@ -67,7 +67,11 @@ try:
     from mcp_integration.registry import set_mcp_processor
     from app.services import surge_client, calendar_client, meet_client, strava_client
     
-    logger.info(f"🔧 Initializing MCP processor with clients: surge={type(surge_client).__name__}, calendar={type(calendar_client).__name__}, meet={type(meet_client).__name__}")
+    logger.info(f"🔧 Initializing MCP processor with clients:")
+    logger.info(f"   surge_client: {type(surge_client).__name__} (enabled: {getattr(surge_client, 'enabled', 'unknown')})")
+    logger.info(f"   calendar_client: {type(calendar_client).__name__} (enabled: {getattr(calendar_client, 'enabled', 'unknown')})")
+    logger.info(f"   meet_client: {type(meet_client).__name__} (enabled: {getattr(meet_client, 'enabled', 'unknown')})")
+    logger.info(f"   strava_client: {type(strava_client).__name__ if strava_client else 'None'}")
     logger.info(f"🔧 Environment check - ANTHROPIC_API_KEY present: {bool(os.getenv('ANTHROPIC_API_KEY'))}")
     
     mcp_processor = MCPCommandProcessor(
