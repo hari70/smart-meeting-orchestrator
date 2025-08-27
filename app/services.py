@@ -75,15 +75,12 @@ strava_client = None
 
 # NEW: Clean Architecture - Modern Command Processor
 try:
-    # Get MCP processor from registry
-    from mcp_integration.registry import get_mcp_processor
-    mcp_processor = get_mcp_processor()
-    
+    # Don't get MCP processor from registry during init - let command processor get it dynamically
     command_processor = ModernCommandProcessor(
         calendar_client=calendar_client,
         meet_client=meet_client, 
         sms_client=surge_client,
-        mcp_processor=mcp_processor
+        mcp_processor=None  # Will be fetched dynamically from registry
     )
     logger.info("🤖 Modern Command Processor ready - Clean Architecture with Strategy/Command patterns and MCP integration")
 except Exception as e:

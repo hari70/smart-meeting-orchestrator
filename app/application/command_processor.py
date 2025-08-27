@@ -33,8 +33,22 @@ class ModernCommandProcessor:
         # Initialize handlers
         self._handlers = {}
         
-        # MCP processor for LLM-powered processing
-        self.mcp_processor = mcp_processor
+        # Store MCP processor if provided, but we'll also check registry dynamically
+        self._stored_mcp_processor = mcp_processor
+    
+    def _get_mcp_processor(self):
+        """Get MCP processor from registry or stored instance"""
+        # First try to get from registry (this handles dynamic updates)
+        try:
+            from mcp_integration.registry import get_mcp_processor
+            processor = get_mcp_processor()
+            if processor:
+                return processor
+        except ImportError:
+            pass
+        
+        # Fall back to stored instance
+        return self._stored_mcp_processor
     
     def _get_repositories(self, db: Session):
         """Lazy initialization of repositories."""
@@ -81,11 +95,12 @@ class ModernCommandProcessor:
         """Process command using MCP tools and LLM for intelligent responses."""
         try:
             # Use MCP processor if available
-            logger.info(f"[MCP_CMD] Checking for MCP processor: {self.mcp_processor}")
+            mcp_processor = self._get_mcp_processor()
+            logger.info(f"[MCP_CMD] Checking for MCP processor: {mcp_processor}")
             
-            if self.mcp_processor and hasattr(self.mcp_processor, 'process_command_with_llm'):
-                logger.info(f"[MCP_CMD] Using MCP processor: {self.mcp_processor}, llm_enabled={getattr(self.mcp_processor, 'llm_enabled', 'unknown')}")
-                result = await self.mcp_processor.process_command_with_llm(
+            if mcp_processor and hasattr(mcp_processor, 'process_command_with_llm'):
+                logger.info(f"[MCP_CMD] Using MCP processor: {mcp_processor}, llm_enabled={getattr(mcp_processor, 'llm_enabled', 'unknown')}")
+                result = await mcp_processor.process_command_with_llm(
                     message_text, team_member, conversation, db
                 )
                 
@@ -95,7 +110,7 @@ class ModernCommandProcessor:
                 
                 return result
             else:
-                logger.error(f"[MCP_CMD] MCP processor not available or not LLM-enabled: processor={self.mcp_processor}")
+                logger.error(f"[MCP_CMD] MCP processor not available or not LLM-enabled: processor={mcp_processor}")
                 return "❌ MCP processor with LLM support is not available. Please ensure ANTHROPIC_API_KEY is configured in Railway."
                 
         except Exception as e:
