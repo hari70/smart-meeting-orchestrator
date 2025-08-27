@@ -60,9 +60,20 @@ async def global_exception_handler(request: Request, exc: Exception):  # pragma:
 
 _include_routers(app)
 
-# Initialize tool registry
-from mcp_integration.register_default_tools import initialize_default_tools  # noqa: E402
-initialize_default_tools()
+# Initialize MCP tools with error handling
+try:
+    from mcp_integration.mcp_command_processor import MCPCommandProcessor
+    from app.services import surge_client, calendar_client, meet_client, strava_client
+    mcp_processor = MCPCommandProcessor(
+        sms_client=surge_client,
+        calendar_client=calendar_client,
+        meet_client=meet_client,
+        strava_client=strava_client
+    )
+    logger.info("🔧 MCP tools initialized")
+except Exception as e:
+    logger.warning(f"⚠️  Failed to initialize MCP tools: {e}")
+    mcp_processor = None
 
 
 if __name__ == "__main__":  # pragma: no cover

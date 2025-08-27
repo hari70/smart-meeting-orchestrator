@@ -123,11 +123,10 @@ class TestTeamMemberModel:
 
 class TestMeetingModel:
     """Test Meeting model functionality."""
-    
     def test_create_meeting(self, test_db_session, sample_team):
         """Test creating a new meeting."""
         scheduled_time = datetime.now(timezone.utc) + timedelta(days=1)
-        
+
         meeting = Meeting(
             team_id=sample_team.id,
             title="Team Standup",
@@ -139,12 +138,13 @@ class TestMeetingModel:
         )
         test_db_session.add(meeting)
         test_db_session.commit()
-        
+        test_db_session.refresh(meeting)
+
         assert meeting.id is not None
         assert isinstance(meeting.id, uuid.UUID)
         assert meeting.team_id == sample_team.id
         assert meeting.title == "Team Standup"
-        assert meeting.scheduled_time == scheduled_time
+        assert meeting.scheduled_time.replace(tzinfo=None) == scheduled_time.replace(tzinfo=None)
         assert meeting.duration_minutes == 30
         assert meeting.created_at is not None
     

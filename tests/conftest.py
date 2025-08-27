@@ -18,8 +18,10 @@ from main import app
 def test_db_engine():
     """Create a test database engine using SQLite in memory."""
     # Use in-memory SQLite for fast tests
+    # Use file-based SQLite to allow multiple connections (TestClient + direct sessions)
+    tmp_path = os.path.join(tempfile.gettempdir(), "smo_test_db.sqlite")
     engine = create_engine(
-        "sqlite:///:memory:",
+        f"sqlite:///{tmp_path}",
         connect_args={"check_same_thread": False}
     )
     Base.metadata.create_all(bind=engine)

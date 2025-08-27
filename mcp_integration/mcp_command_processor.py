@@ -14,6 +14,7 @@ try:
     ANTHROPIC_AVAILABLE = True
 except ImportError:
     ANTHROPIC_AVAILABLE = False
+    # logger not yet defined here, will log later
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +35,16 @@ class MCPCommandProcessor:
         else:
             self.claude_client = None
             self.llm_enabled = False
+            if not ANTHROPIC_AVAILABLE:
+                logger.warning("⚠️  Anthropic not available - MCP tools will be limited")
+            elif not os.getenv("ANTHROPIC_API_KEY"):
+                logger.warning("⚠️  ANTHROPIC_API_KEY not set - MCP tools will be limited")
             logger.info("📝 MCP Command Processor without LLM - using basic processing")
     
     async def process_command_with_llm(self, message_text: str, team_member, conversation, db: Session) -> str:
         """Process SMS command with FORCED tool usage - no conversational responses allowed"""
         
-        if not self.llm_enabled:
+        if not self.llm_enabled or self.claude_client is None:
             return await self._basic_command_processing(message_text, team_member, conversation, db)
         
         try:
@@ -53,14 +58,18 @@ class MCPCommandProcessor:
             logger.info(f"🚀 AGGRESSIVE MCP processing: {message_text[:50]}...")
             
             # Call Claude with FORCED tool usage
-            response = self.claude_client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=1000,
-                temperature=0.0,  # No creativity - just actions
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
-                tools=self._get_action_tools()
-            )
+            try:
+                response = self.claude_client.messages.create(
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=1000,
+                    temperature=0.0,  # No creativity - just actions
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                    tools=self._get_action_tools()
+                )
+            except Exception as e:
+                logger.warning(f"⚠️  Claude API call failed: {e}")
+                return await self._basic_command_processing(message_text, team_member, conversation, db)
             
             logger.info(f"🤖 Claude response blocks: {len(response.content)}")
             

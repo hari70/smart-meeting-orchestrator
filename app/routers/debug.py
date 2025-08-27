@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, Depends, HTTPException, Header
+from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
@@ -7,21 +7,11 @@ import os
 
 from app.config import get_settings
 from app import services
+from app.dependencies import require_admin_key
 from database.connection import get_db
 from database.models import Team, TeamMember
 
 settings = get_settings()
-
-def require_admin_key(x_api_key: str = Header(None, alias="X-API-Key")) -> bool:
-    s = get_settings()
-    key = s.admin_api_key
-    if not key and s.environment not in ("production", "staging"):
-        return True
-    if not key:
-        raise HTTPException(status_code=503, detail="Admin API key not configured")
-    if not x_api_key or x_api_key != key:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
-    return True
 
 router = APIRouter(prefix="/debug", tags=["debug"], dependencies=[Depends(require_admin_key)])
 logger = logging.getLogger(__name__)
@@ -104,17 +94,19 @@ async def calendar_status():
         if not v:
             return None
         return v[:keep] + "…" + v[-4:]
+    enabled = getattr(c, "enabled", False)
+    access_token = getattr(c, "access_token", None)
     return {
-        "enabled": c.enabled,
+        "enabled": enabled,
         "calendar_id": getattr(c, "calendar_id", "primary"),
-        "has_access_token": bool(c.access_token),
-        "access_token_sample": mask(c.access_token, 12),
+        "has_access_token": bool(access_token),
+        "access_token_sample": mask(access_token, 12) if access_token else None,
         "has_refresh_token": bool(getattr(c, "refresh_token", None)),
         "refresh_token_sample": mask(getattr(c, "refresh_token", None), 6),
         "client_id_ok": bool(getattr(c, "client_id", "").endswith(".apps.googleusercontent.com")),
         "client_id_sample": mask(getattr(c, "client_id", None), 10),
         "client_secret_present": bool(getattr(c, "client_secret", None)),
-        "mode_hint": "real_google_api" if c.enabled else "mock",
+        "mode_hint": "real_google_api" if enabled else "mock",
         "how_to_get_real": "Set GOOGLE_CALENDAR_ACCESS_TOKEN or refresh trio then restart process",
     }
 

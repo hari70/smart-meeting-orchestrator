@@ -9,6 +9,14 @@ def _build_engine(url: str):
     if url.startswith("sqlite"):
         # Allow multithreaded test client usage
         return create_engine(url, connect_args={"check_same_thread": False})
+    elif url.startswith("postgresql"):
+        # Add connection pooling and timeout settings for PostgreSQL
+        return create_engine(
+            url,
+            pool_pre_ping=True,
+            pool_recycle=300,
+            connect_args={"connect_timeout": 10}
+        )
     return create_engine(url)
 
 if not DATABASE_URL:

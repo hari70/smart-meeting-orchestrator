@@ -23,19 +23,32 @@ class _PlaceholderClient:
         self.enabled = False
 
 # Initialize external clients
-surge_client = SurgeSMSClient(
-    api_key=settings.surge_api_key or "",
-    account_id=settings.surge_account_id or ""
-)
+try:
+    surge_client = SurgeSMSClient(
+        api_key=settings.surge_api_key or "",
+        account_id=settings.surge_account_id or ""
+    )
+    logger.info("📱 Surge SMS client initialized")
+except Exception as e:
+    logger.warning(f"⚠️  Failed to initialize Surge SMS client: {e}")
+    surge_client = _PlaceholderClient()
+
+try:
+    calendar_client = RealMCPCalendarClient()
+    logger.info("📅 Using Real MCP Google Calendar tools (your 8 tools)")
+except Exception as e:
+    logger.warning(f"⚠️  Failed to initialize MCP Calendar client: {e}")
+    calendar_client = _PlaceholderClient()
+
+try:
+    meet_client = GoogleMeetClient()
+    logger.info("🔗 Meet client initialized")
+except Exception as e:
+    logger.warning(f"⚠️  Failed to initialize Meet client: {e}")
+    meet_client = _PlaceholderClient()
 
 # Some tests expect strava_client to be None initially (placeholder behavior)
 strava_client = None
-
-calendar_client = RealMCPCalendarClient()
-logger.info("📅 Using Real MCP Google Calendar tools (your 8 tools)")
-
-meet_client = GoogleMeetClient()
-logger.info("🔗 Meet client initialized")
 
 # NEW: Clean Architecture - Modern Command Processor
 try:
