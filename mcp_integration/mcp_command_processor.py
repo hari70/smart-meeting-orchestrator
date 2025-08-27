@@ -437,12 +437,13 @@ ACTION REQUIRED NOW."""
             
             result = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
             
-            # Add timezone info - get system timezone offset
-            local_offset = time.timezone if not time.daylight else time.altzone
-            local_tz_offset = timedelta(seconds=-local_offset)
-            result = result.replace(tzinfo=dt_timezone(local_tz_offset))
+            # Add timezone info - use Eastern Time (America/New_York) instead of system timezone
+            # This ensures times are interpreted correctly by Google Calendar
+            from dateutil import tz
+            eastern_tz = tz.gettz('America/New_York')
+            result = result.replace(tzinfo=eastern_tz)
             
-            logger.info(f"📅 [MCP FINAL DEBUG] Combined result (timezone-aware): {result}")
+            logger.info(f"📅 [MCP FINAL DEBUG] Combined result (Eastern Time): {result}")
             logger.info(f"📅 [MCP FINAL DEBUG] Result weekday: {result.weekday()} (0=Mon, 1=Tue, 2=Wed)")
             logger.info(f"✅ [MCP] Final parsed datetime: {result.strftime('%A, %B %d, %Y at %I:%M %p %Z')}")
             
@@ -455,22 +456,20 @@ ACTION REQUIRED NOW."""
                     logger.error(f"   Actually got: {result.date()} ({result.strftime('%A')})")
                     logger.error(f"   Difference: {(result.date() - expected_date).days} days")
                 else:
-                    logger.info(f"✅ [MCP] Date calculation verified correct for 'tomorrow' (timezone-aware)")
+                    logger.info(f"✅ [MCP] Date calculation verified correct for 'tomorrow' (Eastern Time)")
             
             return result
             
         except Exception as e:
             logger.error(f"❌ [MCP] Failed to parse datetime: {message}, error: {e}")
-            # Return tomorrow at 7 PM as fallback with timezone
-            from datetime import timezone as dt_timezone
-            import time
+            # Return tomorrow at 7 PM as fallback with Eastern Time
+            from dateutil import tz
+            eastern_tz = tz.gettz('America/New_York')
                         
             fallback = datetime.combine((datetime.now() + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
-            # Add timezone info
-            local_offset = time.timezone if not time.daylight else time.altzone
-            local_tz_offset = timedelta(seconds=-local_offset)
-            fallback = fallback.replace(tzinfo=dt_timezone(local_tz_offset))
-            logger.warning(f"⚠️ [MCP] Using fallback datetime (timezone-aware): {fallback}")
+            # Add Eastern Time timezone info
+            fallback = fallback.replace(tzinfo=eastern_tz)
+            logger.warning(f"⚠️ [MCP] Using fallback datetime (Eastern Time): {fallback}")
             return fallback
     
     async def _execute_action_tool(self, tool_name: str, tool_input: Dict, team_member, db) -> Dict:
