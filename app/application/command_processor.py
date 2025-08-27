@@ -85,14 +85,19 @@ class ModernCommandProcessor:
             
             if self.mcp_processor and hasattr(self.mcp_processor, 'process_command_with_llm'):
                 logger.info(f"[MCP_CMD] Using MCP processor: {self.mcp_processor}, llm_enabled={getattr(self.mcp_processor, 'llm_enabled', 'unknown')}")
-                return await self.mcp_processor.process_command_with_llm(
+                result = await self.mcp_processor.process_command_with_llm(
                     message_text, team_member, conversation, db
                 )
+                
+                # Check if MCP processor returned an error about LLM not being available
+                if result.startswith("❌ Claude LLM service is not available") or result.startswith("❌ LLM processing failed"):
+                    return result  # Return the error message as-is
+                
+                return result
             else:
-                logger.warning(f"[MCP_CMD] MCP processor not available: processor={self.mcp_processor}, has_method={hasattr(self.mcp_processor or {}, 'process_command_with_llm')}")
-                return await self.process_command(message_text, team_member, conversation, db)
+                logger.error(f"[MCP_CMD] MCP processor not available or not LLM-enabled: processor={self.mcp_processor}")
+                return "❌ MCP processor with LLM support is not available. Please ensure ANTHROPIC_API_KEY is configured in Railway."
                 
         except Exception as e:
             logger.error(f"MCP command error: {e}", exc_info=True)
-            # Fallback to pattern-based processing
-            return await self.process_command(message_text, team_member, conversation, db)
+            return f"❌ MCP processing failed: {str(e)}. Please ensure ANTHROPIC_API_KEY is properly configured."

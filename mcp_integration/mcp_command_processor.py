@@ -42,11 +42,11 @@ class MCPCommandProcessor:
             logger.info("📝 MCP Command Processor without LLM - using basic processing")
     
     async def process_command_with_llm(self, message_text: str, team_member, conversation, db: Session) -> str:
-        """Process SMS command with FORCED tool usage - no conversational responses allowed"""
-        
+        """LLM-ONLY MODE: Process SMS command with Claude LLM and MCP tools - NO FALLBACKS"""
+
         if not self.llm_enabled or self.claude_client is None:
-            return await self._basic_command_processing(message_text, team_member, conversation, db)
-        
+            return "❌ Claude LLM service is not available. Please ensure ANTHROPIC_API_KEY is properly configured in Railway environment variables."
+
         try:
             # Get team context
             team_context = await self._get_team_context(team_member, db)
@@ -58,18 +58,14 @@ class MCPCommandProcessor:
             logger.info(f"🚀 AGGRESSIVE MCP processing: {message_text[:50]}...")
             
             # Call Claude with FORCED tool usage
-            try:
-                response = self.claude_client.messages.create(
-                    model="claude-3-5-sonnet-20241022",
-                    max_tokens=1000,
-                    temperature=0.0,  # No creativity - just actions
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": user_prompt}],
-                    tools=self._get_action_tools()
-                )
-            except Exception as e:
-                logger.warning(f"⚠️  Claude API call failed: {e}")
-                return await self._basic_command_processing(message_text, team_member, conversation, db)
+            response = self.claude_client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1000,
+                temperature=0.0,  # No creativity - just actions
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+                tools=self._get_action_tools()
+            )
             
             logger.info(f"🤖 Claude response blocks: {len(response.content)}")
             
@@ -77,8 +73,8 @@ class MCPCommandProcessor:
             return await self._process_action_response(response, team_member, db, message_text)
             
         except Exception as e:
-            logger.error(f"❌ MCP processing error: {e}")
-            return await self._basic_command_processing(message_text, team_member, conversation, db)
+            logger.error(f"LLM processing error: {e}", exc_info=True)
+            return f"❌ LLM processing failed: {str(e)}. Please ensure ANTHROPIC_API_KEY is properly configured."
     
     def _create_action_focused_prompt(self, team_member, team_context: Dict) -> str:
         """Create system prompt that FORCES action instead of conversation"""
@@ -661,20 +657,8 @@ ACTION REQUIRED NOW."""
         }
     
     async def _basic_command_processing(self, message_text: str, team_member, conversation, db) -> str:
-        """Fallback processing using MCP tools directly when LLM is not available"""
-        try:
-            # Try to use MCP tools directly based on intent
-            if self._is_scheduling_request(message_text):
-                return await self._handle_scheduling_with_tools(message_text, team_member, db)
-            elif self._is_list_request(message_text):
-                return await self._handle_list_with_tools(team_member, db)
-            elif self._is_cancel_request(message_text):
-                return await self._handle_cancel_with_tools(message_text, team_member, db)
-            else:
-                return "I'm ready to help with scheduling! Try: 'Schedule family meeting tomorrow at 7pm'"
-        except Exception as e:
-            logger.error(f"Basic MCP processing error: {e}")
-            return "I'm ready to help with scheduling! Try: 'Schedule family meeting tomorrow at 7pm'"
+        """LLM-ONLY MODE: Return error message since LLM is required"""
+        return "❌ LLM service is required for this feature. Please ensure ANTHROPIC_API_KEY is properly configured."
 
     def _is_list_request(self, message_text: str) -> bool:
         """Check if message is requesting to list meetings"""
@@ -683,58 +667,3 @@ ACTION REQUIRED NOW."""
     def _is_cancel_request(self, message_text: str) -> bool:
         """Check if message is requesting to cancel a meeting"""
         return any(word in message_text.lower() for word in ['cancel', 'delete', 'remove'])
-
-    async def _handle_scheduling_with_tools(self, message_text: str, team_member, db) -> str:
-        """Handle scheduling using MCP tools directly"""
-        try:
-            # Extract meeting details from message
-            title = self._extract_meeting_title(message_text)
-            start_time = self._extract_meeting_time(message_text)
-            
-            if not title or not start_time:
-                return "I need both a meeting title and time. Try: 'Schedule team meeting tomorrow at 2pm'"
-            
-            # Use calendar client to create event
-            if hasattr(self.calendar_client, 'create_event'):
-                result = await self.calendar_client.create_event(
-                    title=title,
-                    start_time=start_time,
-                    duration_minutes=60,
-                    description=f"Created via SMS by {team_member.name}"
-                )
-                return f"✅ Meeting scheduled: {title} at {start_time}"
-            else:
-                return "Calendar service not available. Please try again later."
-                
-        except Exception as e:
-            logger.error(f"Scheduling with tools error: {e}")
-            return "I encountered an error scheduling your meeting. Please try again."
-
-    async def _handle_list_with_tools(self, team_member, db) -> str:
-        """Handle listing meetings using MCP tools directly"""
-        try:
-            if hasattr(self.calendar_client, 'list_events'):
-                events = await self.calendar_client.list_events(days_ahead=7, limit=5)
-                if events:
-                    response = "📅 Upcoming meetings:\n"
-                    for event in events:
-                        response += f"• {event.get('title', 'Unknown')} at {event.get('start_time', 'Unknown time')}\n"
-                    return response
-                else:
-                    return "No upcoming meetings found."
-            else:
-                return "Calendar service not available. Please try again later."
-                
-        except Exception as e:
-            logger.error(f"Listing with tools error: {e}")
-            return "I encountered an error retrieving your meetings. Please try again."
-
-    async def _handle_cancel_with_tools(self, message_text: str, team_member, db) -> str:
-        """Handle canceling meetings using MCP tools directly"""
-        try:
-            # This is a simplified version - in practice you'd need to identify which meeting to cancel
-            return "To cancel a meeting, please specify which one. For example: 'Cancel the team meeting tomorrow'"
-            
-        except Exception as e:
-            logger.error(f"Canceling with tools error: {e}")
-            return "I encountered an error canceling your meeting. Please try again."
