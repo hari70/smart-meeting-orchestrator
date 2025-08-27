@@ -6,6 +6,7 @@ import os
 import json
 import logging
 from datetime import datetime, timedelta
+from utils.time import utc_now, iso_utc
 import re
 
 # Local imports
@@ -55,7 +56,7 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Railway"""
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "healthy", "timestamp": iso_utc()}
 
 @app.post("/webhook/sms")
 async def sms_webhook(request: Request, db: Session = Depends(get_db)):
@@ -242,7 +243,7 @@ def get_or_create_conversation(phone_number: str, db: Session) -> Conversation:
         conversation = Conversation(
             phone_number=phone_number,
             context={},
-            last_activity=datetime.utcnow()
+            last_activity=utc_now()
         )
         db.add(conversation)
         db.commit()
@@ -269,12 +270,12 @@ def update_conversation_context(conversation: Conversation, message: str, db: Se
     messages = conversation.context.get("recent_messages", [])
     messages.append({
         "message": message,
-        "timestamp": datetime.utcnow().isoformat()
+    "timestamp": iso_utc()
     })
     
     # Keep only last 5 messages
     conversation.context["recent_messages"] = messages[-5:]
-    conversation.last_activity = datetime.utcnow()
+    conversation.last_activity = utc_now()
     
     db.commit()
 

@@ -3,7 +3,8 @@
 import json
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from utils.time import utc_now, iso_utc
 import os
 import re
 from sqlalchemy.orm import Session
@@ -120,7 +121,7 @@ class IntelligentCoordinator(ParsingMixin, ToolsMixin, WorkoutMixin, FallbackMix
             for attempt in range(max_retries):
                 try:
                     # Call Claude with tool use capability
-                    response = self.claude_client.messages.create(
+                    response = self.claude_client.messages.create(  # type: ignore[union-attr]
                         model="claude-3-5-sonnet-20241022",
                         max_tokens=1000,
                         temperature=0.1,
@@ -238,7 +239,7 @@ class IntelligentCoordinator(ParsingMixin, ToolsMixin, WorkoutMixin, FallbackMix
                         try:
                             from datetime import datetime
                             msg_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                            time_ago = datetime.utcnow() - msg_time.replace(tzinfo=None)
+                            time_ago = utc_now().replace(tzinfo=None) - msg_time.replace(tzinfo=None)
                             if time_ago.total_seconds() < 300:  # Less than 5 minutes
                                 time_desc = "just now"
                             elif time_ago.total_seconds() < 3600:  # Less than 1 hour
@@ -532,7 +533,7 @@ class IntelligentCoordinator(ParsingMixin, ToolsMixin, WorkoutMixin, FallbackMix
                     "type": "tool_execution_confirmation",
                     "original_request": original_message,
                     "tool_results": tool_results,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": iso_utc(),
                     "awaiting_response": True
                 }
                     
@@ -560,7 +561,7 @@ class IntelligentCoordinator(ParsingMixin, ToolsMixin, WorkoutMixin, FallbackMix
                     "original_request": original_message,
                     "event_details": event_details,
                     "unmapped_attendees": unmapped_attendees,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": iso_utc(),
                     "awaiting_response": True
                 }
                     
@@ -587,7 +588,7 @@ class IntelligentCoordinator(ParsingMixin, ToolsMixin, WorkoutMixin, FallbackMix
                     "type": "clarification_question",
                     "original_request": original_message,
                     "question_asked": question_response,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": iso_utc(),
                     "awaiting_response": True
                 }
                     
