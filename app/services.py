@@ -5,6 +5,7 @@ away from `main.py` for cleaner testing.
 """
 import logging
 from typing import Optional, List, Dict
+from datetime import datetime
 from app.config import get_settings
 from sms_coordinator.surge_client import SurgeSMSClient
 from google_integrations.direct_google_calendar import DirectGoogleCalendarClient
@@ -40,6 +41,11 @@ class _PlaceholderClient:
     async def find_free_time(self, duration_minutes: int, date) -> List[Dict]:
         """Placeholder: Return empty list for failed calendar client"""
         return []
+    
+    async def update_event(self, event_id: str, title: Optional[str] = None, start_time: Optional[datetime] = None, 
+                          duration_minutes: Optional[int] = None, attendees: Optional[List[str]] = None) -> Optional[Dict]:
+        """Placeholder: Return None for failed calendar client"""
+        return None
     
     async def send_message(self, *args, **kwargs):
         """Placeholder: Do nothing for failed SMS client"""

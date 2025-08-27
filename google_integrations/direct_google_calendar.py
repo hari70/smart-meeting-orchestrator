@@ -498,6 +498,126 @@ class DirectGoogleCalendarClient:
             logger.error(f"❌ Error deleting Google Calendar event: {e}")
             return False
     
+    async def update_event(self, event_id: str, title: Optional[str] = None, start_time: Optional[datetime] = None, 
+                          duration_minutes: Optional[int] = None, attendees: Optional[List[str]] = None) -> Optional[Dict]:
+        """Update Google Calendar event"""
+        
+        if not self.enabled:
+            logger.info(f"📝 [MOCK MODE] Would update event: {event_id}")
+            return {
+                "id": event_id,
+                "title": title or "Updated Meeting",
+                "start_time": start_time.isoformat() if start_time else "Time unchanged",
+                "source": "mock",
+                "note": "MOCK UPDATE - Configure Google Calendar API for real updates"
+            }
+        
+        try:
+            if not await self._ensure_valid_token():
+                return None
+            
+            # First, get the current event to merge with updates
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            
+            # Get current event
+            response = requests.get(
+                f"{self.base_url}/calendars/{self.calendar_id}/events/{event_id}",
+                headers=headers,
+                timeout=10
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"❌ Failed to get current event: {response.status_code}")
+                return None
+            
+            current_event = response.json()
+            
+            # Prepare update data
+            update_data = {}
+            
+            if title:
+                update_data["summary"] = title
+                
+            if start_time and duration_minutes:
+                end_time = start_time + timedelta(minutes=duration_minutes)
+                
+                # Handle timezone awareness
+                if start_time.tzinfo is None:
+                    from datetime import timezone as dt_timezone
+                    import time
+                    local_offset = time.timezone if not time.daylight else time.altzone
+                    local_tz_offset = timedelta(seconds=-local_offset)
+                    start_time = start_time.replace(tzinfo=dt_timezone(local_tz_offset))
+                    end_time = end_time.replace(tzinfo=dt_timezone(local_tz_offset))
+                
+                update_data["start"] = {
+                    "dateTime": start_time.isoformat(),
+                    "timeZone": "America/New_York"
+                }
+                update_data["end"] = {
+                    "dateTime": end_time.isoformat(),
+                    "timeZone": "America/New_York"
+                }
+            
+            if attendees:
+                attendee_list = []
+                for email in attendees:
+                    if email and '@' in email:
+                        attendee_list.append({"email": email})
+                update_data["attendees"] = attendee_list
+            
+            if not update_data:
+                logger.warning("⚠️ No valid update fields provided")
+                return None
+            
+            # Update the event
+            update_response = requests.put(
+                f"{self.base_url}/calendars/{self.calendar_id}/events/{event_id}",
+                headers=headers,
+                json=update_data,
+                timeout=15
+            )
+            
+            if update_response.status_code == 200:
+                updated_event = update_response.json()
+                logger.info(f"✅ Updated Google Calendar event: {updated_event.get('id')}")
+                
+                return {
+                    "id": updated_event.get("id"),
+                    "title": updated_event.get("summary", title),
+                    "start_time": updated_event.get("start", {}).get("dateTime"),
+                    "end_time": updated_event.get("end", {}).get("dateTime"),
+                    "attendees": [attendee.get("email") for attendee in updated_event.get("attendees", [])],
+                    "meet_link": updated_event.get("hangoutLink"),
+                    "calendar_link": updated_event.get("htmlLink"),
+                    "source": "real_google_api"
+                }
+            else:
+                logger.error(f"❌ Failed to update event: {update_response.status_code}")
+                logger.error(f"❌ Error details: {update_response.text[:200]}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Error updating Google Calendar event: {e}")
+            return None
+    
+    def _mock_event_response(self, title: str, start_time: datetime, duration_minutes: int, meet_link: Optional[str]) -> Dict:
+        """Return mock response when API not configured"""
+        
+        logger.info(f"📝 [MOCK MODE] Would create: {title} at {start_time.strftime('%A, %B %d at %I:%M %p')}")
+        
+        return {
+            "id": f"mock_{int(start_time.timestamp())}",
+            "title": title,
+            "start_time": start_time.isoformat(),
+            "end_time": (start_time + timedelta(minutes=duration_minutes)).isoformat(),
+            "attendees": [],
+            "meet_link": meet_link or "https://meet.google.com/mock-link",
+            "calendar_link": f"https://calendar.google.com/calendar/u/0/r/day/{start_time.strftime('%Y/%m/%d')}",
+            "source": "mock",
+            "note": "MOCK EVENT - Configure Google Calendar API for real events"
+        }
+    
     async def _ensure_valid_token(self) -> bool:
         """Ensure we have a valid access token"""
         

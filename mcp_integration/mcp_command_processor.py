@@ -104,9 +104,10 @@ CRITICAL RULES:
 4. **BE DECISIVE** - If time not specified, pick a reasonable time and create the event
 
 TOOL USAGE REQUIREMENTS:
-- ANY mention of "meeting", "schedule", "call", "dinner", "get together" → MUST use create_calendar_event
+- ANY mention of "meeting", "schedule", "call", "dinner", "lunch", "breakfast" → MUST use create_calendar_event
 - Questions about "when", "what time", "availability" → MUST use list_upcoming_events
-- "Cancel" or "delete" → MUST use appropriate tool
+- "Cancel" or "delete" or "remove" → MUST use appropriate tool
+- "Move", "change", "reschedule", "update time" → MUST use update_calendar_event
 - NEVER respond with just text for actionable requests
 
 RESPONSE FORMAT:
@@ -116,13 +117,14 @@ RESPONSE FORMAT:
 - NO conversational responses allowed
 
 EXAMPLES OF FORBIDDEN RESPONSES:
-❌ "Hi! I can meet this Sunday at 3pm"
+❌ "I can meet this Sunday at 3pm"
 ❌ "Let me know if that works for you"
 ❌ "Would you like me to schedule that?"
 
 REQUIRED RESPONSES:
 ✅ Use create_calendar_event → "✅ Meeting scheduled for Sunday 3pm - [meet link]"
 ✅ Use list_upcoming_events → "📅 Your meetings: [list]"
+✅ Use update_calendar_event → "✅ Meeting moved to tomorrow 2pm"
 
 Remember: YOU ARE AN ACTION SYSTEM, NOT A CONVERSATION PARTNER."""
 
@@ -136,6 +138,7 @@ ANALYZE THIS REQUEST AND TAKE IMMEDIATE ACTION:
 1. Is this a scheduling request? → Use create_calendar_event immediately
 2. Is this asking about meetings? → Use list_upcoming_events immediately  
 3. Is this asking for availability? → Use find_calendar_free_time immediately
+4. Is this a move/reschedule/update request? → Use update_calendar_event immediately
 
 DO NOT RESPOND CONVERSATIONALLY. TAKE ACTION WITH TOOLS.
 
@@ -144,6 +147,12 @@ If this is about scheduling ANY kind of meeting/call/dinner/gathering:
 - Choose a reasonable time if not specified
 - Create the actual calendar event using create_calendar_event
 - Respond with confirmation and meeting details
+
+If this is about moving/changing/rescheduling an existing meeting:
+- Identify which meeting to update (may need to list events first)
+- Parse the new time/date
+- Use update_calendar_event with the event ID and new details
+- Respond with confirmation of the change
 
 ACTION REQUIRED NOW."""
 
@@ -176,14 +185,18 @@ ACTION REQUIRED NOW."""
                 }
             },
             {
-                "name": "find_calendar_free_time", 
-                "description": "Find available time slots - USE FOR availability questions",
+                "name": "update_calendar_event",
+                "description": "UPDATE an existing calendar event - USE THIS FOR 'move meeting', 'change time', 'reschedule' requests",
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "duration_minutes": {"type": "integer", "description": "Required duration", "default": 60},
-                        "date_preference": {"type": "string", "description": "Preferred timeframe"}
-                    }
+                        "event_id": {"type": "string", "description": "ID of the event to update"},
+                        "title": {"type": "string", "description": "New event title (optional)"},
+                        "start_time": {"type": "string", "description": "New start time in ISO format (optional)"},
+                        "duration_minutes": {"type": "integer", "description": "New duration in minutes (optional)"},
+                        "description": {"type": "string", "description": "New event description (optional)"}
+                    },
+                    "required": ["event_id"]
                 }
             }
         ]
@@ -277,6 +290,109 @@ ACTION REQUIRED NOW."""
         return None
     
     def _extract_meeting_title(self, message: str) -> str:
+        """Extract meeting title/subject from SMS message using better patterns"""
+        import re
+        message_lower = message.lower().strip()
+        
+        # Pattern 1: "Schedule a meeting with X about Y"
+        about_pattern = r'(?:schedule|meeting|call).*?(?:about|subject:|topic:)\s+([^\s]+(?:\s+[^\s]+)*?)(?:\s+(?:tomorrow|today|this|next|at|with|\d)|\.?$)'
+        match = re.search(about_pattern, message_lower, re.IGNORECASE)
+        if match:
+            title = match.group(1).strip().title()
+            logger.info(f"📝 [TITLE EXTRACTION] Found title via 'about' pattern: '{title}'")
+            return title
+        
+        # Pattern 2: "Schedule a meeting for Y"
+        for_pattern = r'(?:schedule|meeting|call).*?for\s+([^\s]+(?:\s+[^\s]+)*?)(?:\s+(?:tomorrow|today|this|next|at|with|\d)|\.?$)'
+        match = re.search(for_pattern, message_lower, re.IGNORECASE)
+        if match:
+            title = match.group(1).strip().title()
+            logger.info(f"📝 [TITLE EXTRACTION] Found title via 'for' pattern: '{title}'")
+            return title
+        
+        # Pattern 3: Look for quoted subjects
+        quote_pattern = r'["\']([^"\']++)["\']'
+        match = re.search(quote_pattern, message)
+        if match:
+            title = match.group(1).strip()
+            logger.info(f"📝 [TITLE EXTRACTION] Found quoted title: '{title}'")
+            return title
+        
+        # Pattern 4: Extract capitalized phrases that might be subjects
+        words = message.split()
+        capitalized_phrases = []
+        current_phrase = []
+        
+        for word in words:
+            # Skip common scheduling words
+            if word.lower() in ['schedule', 'meeting', 'call', 'with', 'about', 'tomorrow', 'today', 'at', 'pm', 'am', 'and', 'the', 'a', 'an']:
+                if current_phrase:
+                    capitalized_phrases.append(' '.join(current_phrase))
+                    current_phrase = []
+                continue
+            
+            # Check if word looks like a subject word (capitalized or contains meaningful content)
+            if word[0].isupper() or any(char.isalpha() for char in word):
+                current_phrase.append(word)
+            else:
+                if current_phrase:
+                    capitalized_phrases.append(' '.join(current_phrase))
+                    current_phrase = []
+        
+        if current_phrase:
+            capitalized_phrases.append(' '.join(current_phrase))
+        
+        # Find the most likely subject (longest meaningful phrase)
+        for phrase in sorted(capitalized_phrases, key=len, reverse=True):
+            if len(phrase) > 2 and not phrase.lower() in ['hari', 'sundar', 'rick']:  # Skip names only
+                logger.info(f"📝 [TITLE EXTRACTION] Found capitalized phrase: '{phrase}'")
+                return phrase
+        
+        # Fallback: try to find any meaningful words
+        meaningful_words = []
+        for word in words:
+            if (len(word) > 2 and 
+                word.lower() not in ['schedule', 'meeting', 'call', 'with', 'about', 'tomorrow', 'today', 'at', 'the', 'and', 'a', 'an'] and
+                not re.match(r'^\d+', word) and  # Skip times
+                not word.lower() in ['hari', 'sundar', 'thangavel', 'manickam']):
+                meaningful_words.append(word)
+        
+        if meaningful_words:
+            title = ' '.join(meaningful_words[:3])  # Take first 3 meaningful words
+            logger.info(f"📝 [TITLE EXTRACTION] Using meaningful words: '{title}'")
+            return title.title()
+        
+        # Final fallback
+        logger.warning(f"📝 [TITLE EXTRACTION] No good title found, using fallback: 'Meeting'")
+        return "Meeting"
+
+    def _extract_mentioned_names(self, message: str) -> List[str]:
+        """Extract names mentioned in the message for selective invitations"""
+        import re
+        
+        # Common name patterns
+        name_patterns = [
+            r'\bwith\s+([A-Za-z]+(?:\s+[A-Za-z]+)*)',  # "with John" or "with John Smith"
+            r'\bfor\s+([A-Za-z]+(?:\s+[A-Za-z]+)*)',   # "for Mary" 
+            r'\band\s+([A-Za-z]+(?:\s+[A-Za-z]+)*)',   # "and David"
+            r'\bplus\s+([A-Za-z]+(?:\s+[A-Za-z]+)*)',  # "plus Sarah"
+            r'\b([A-Za-z]+(?:\s+[A-Za-z]+)*)\s+and\s+me',  # "John and me"
+            r'\b([A-Za-z]+(?:\s+[A-Za-z]+)*)\s+only',   # "John only"
+        ]
+        
+        mentioned_names = []
+        message_lower = message.lower()
+        
+        for pattern in name_patterns:
+            matches = re.findall(pattern, message_lower)
+            for match in matches:
+                # Clean up the name (remove extra spaces, capitalize)
+                name = ' '.join(word.capitalize() for word in match.split())
+                if len(name) > 1 and name not in mentioned_names:  # Avoid single letters
+                    mentioned_names.append(name)
+        
+        logger.info(f"👥 [MCP] Extracted names from message: {mentioned_names}")
+        return mentioned_names
         """Extract meeting title from message"""
         message_lower = message.lower()
         
@@ -482,6 +598,8 @@ ACTION REQUIRED NOW."""
                 return await self._list_real_events(tool_input, team_member, db)
             elif tool_name == "find_calendar_free_time":
                 return await self._find_real_free_time(tool_input, team_member, db)
+            elif tool_name == "update_calendar_event":
+                return await self._update_real_calendar_event(tool_input, team_member, db)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
                 
@@ -521,13 +639,24 @@ ACTION REQUIRED NOW."""
             for member in team_members:
                 logger.info(f"   - {member.name} ({member.phone}) - Email: {member.email or 'MISSING'}")
             
-            # Extract attendee emails (skip the event creator to avoid duplicate)
-            attendee_emails = [member.email for member in team_members if member.email and member.phone != team_member.phone]
-            logger.info(f"👥 [MCP] Attendee emails extracted: {attendee_emails}")
+            # Extract attendee emails - ONLY if specifically mentioned in the message
+            attendee_emails = []
+            
+            # Parse message for specific names
+            mentioned_names = self._extract_mentioned_names(input_data.get("description", "") + " " + input_data["title"])
+            logger.info(f"👥 [MCP] Names mentioned in message: {mentioned_names}")
+            
+            if mentioned_names:
+                # Only invite specifically mentioned people
+                for member in team_members:
+                    if member.email and member.name and any(name.lower() in member.name.lower() for name in mentioned_names):
+                        attendee_emails.append(member.email)
+                        logger.info(f"✅ [MCP] Adding attendee: {member.name} ({member.email})")
+            
+            logger.info(f"👥 [MCP] Final attendee emails: {attendee_emails}")
             
             if not attendee_emails:
-                logger.warning("⚠️ [MCP] No attendee emails found! Event will be created without invites.")
-                logger.warning("💡 [MCP] Make sure family members have email addresses in the database.")
+                logger.info("ℹ️ [MCP] No specific attendees mentioned - creating meeting without invites")
             else:
                 logger.info(f"✅ [MCP] Will send invites to {len(attendee_emails)} attendees: {', '.join(attendee_emails)}")
             
@@ -623,6 +752,86 @@ ACTION REQUIRED NOW."""
         except Exception as e:
             return {"error": str(e)}
     
+    async def _update_real_calendar_event(self, input_data: Dict, team_member, db) -> Dict:
+        """Update real calendar event using MCP client"""
+        
+        try:
+            event_id = input_data["event_id"]
+            logger.info(f"� [MCP] Updating calendar event: {event_id}")
+            
+            # Prepare update data
+            update_data = {}
+            
+            if "title" in input_data:
+                update_data["title"] = input_data["title"]
+                logger.info(f"   Title: {input_data['title']}")
+                
+            if "start_time" in input_data:
+                start_time_str = input_data["start_time"]
+                if isinstance(start_time_str, str):
+                    if start_time_str.startswith("20"):  # ISO format
+                        start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+                    else:
+                        # Relative time parsing
+                        start_time = self._extract_meeting_time(start_time_str)
+                else:
+                    start_time = self._extract_meeting_time("tomorrow evening")
+                
+                if start_time:
+                    update_data["start_time"] = start_time
+                    logger.info(f"   Start time: {start_time}")
+            
+            if "duration_minutes" in input_data:
+                update_data["duration_minutes"] = input_data["duration_minutes"]
+                logger.info(f"   Duration: {input_data['duration_minutes']} minutes")
+                
+            if "description" in input_data:
+                update_data["description"] = input_data["description"]
+                logger.info(f"   Description: {input_data['description']}")
+            
+            # Use the calendar client to update the event
+            logger.info(f"📅 [MCP] Updating calendar event via calendar client...")
+            updated_event = await self.calendar_client.update_event(
+                event_id=event_id,
+                **update_data
+            )
+            
+            logger.info(f"📊 [MCP] Calendar client update response: {updated_event}")
+            
+            if updated_event:
+                logger.info(f"✅ [MCP] Calendar event updated successfully")
+                logger.info(f"   Event ID: {updated_event.get('id')}")
+                logger.info(f"   Source: {updated_event.get('source', 'unknown')}")
+                
+                # Update database record if it exists
+                from database.models import Meeting
+                meeting = db.query(Meeting).filter(Meeting.google_calendar_event_id == event_id).first()
+                if meeting:
+                    if "title" in update_data:
+                        meeting.title = update_data["title"]
+                    if "start_time" in update_data:
+                        meeting.scheduled_time = update_data["start_time"]
+                    if "description" in update_data:
+                        meeting.description = update_data["description"]
+                    db.commit()
+                    logger.info(f"💾 [MCP] Meeting updated in database")
+                
+                return {
+                    "success": True,
+                    "title": updated_event.get("title", update_data.get("title", "Updated Meeting")),
+                    "start_time": update_data.get("start_time").strftime("%A, %B %d at %I:%M %p") if update_data.get("start_time") else "Time unchanged",
+                    "event_id": updated_event.get("id"),
+                    "calendar_source": updated_event.get("source", "unknown"),
+                    "real_calendar_event": updated_event.get("source") != "mock"
+                }
+            else:
+                logger.error(f"❌ [MCP] Calendar client returned None/False for update")
+                return {"success": False, "error": "Calendar client failed to update event"}
+            
+        except Exception as e:
+            logger.error(f"❌ [MCP] Real calendar event update failed: {e}", exc_info=True)
+            return {"error": str(e)}
+    
     async def _generate_action_confirmation(self, tool_results: List[Dict], team_member) -> str:
         """Generate confirmation message based on actions taken"""
         
@@ -636,6 +845,14 @@ ACTION REQUIRED NOW."""
 📅 {tool_result.get('title')}
 🕐 {tool_result.get('start_time')}
 🔗 {tool_result.get('meet_link')}
+
+{f"✨ Using {tool_result.get('calendar_source')} calendar" if tool_result.get('calendar_source') else ''}"""
+            
+            elif tool_name == "update_calendar_event" and tool_result.get("success"):
+                return f"""✅ Meeting updated!
+
+📅 {tool_result.get('title')}
+🕐 {tool_result.get('start_time')}
 
 {f"✨ Using {tool_result.get('calendar_source')} calendar" if tool_result.get('calendar_source') else ''}"""
             
