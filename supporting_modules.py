@@ -50,6 +50,7 @@ class SurgeSMSClient:
 import re
 import logging
 from datetime import datetime, timedelta
+from utils.time import utc_now
 from typing import Optional, List, Dict
 from sqlalchemy.orm import Session
 from database.models import TeamMember, Meeting, Team
@@ -188,7 +189,7 @@ Calendar invites sent to everyone with Google Calendar!
             # Get upcoming meetings for the team
             upcoming_meetings = db.query(Meeting).filter(
                 Meeting.team_id == team_member.team_id,
-                Meeting.scheduled_time > datetime.utcnow()
+                Meeting.scheduled_time > utc_now()
             ).order_by(Meeting.scheduled_time).limit(5).all()
             
             if not upcoming_meetings:
@@ -215,7 +216,7 @@ Calendar invites sent to everyone with Google Calendar!
         try:
             latest_meeting = db.query(Meeting).filter(
                 Meeting.team_id == team_member.team_id,
-                Meeting.scheduled_time > datetime.utcnow()
+                Meeting.scheduled_time > utc_now()
             ).order_by(Meeting.scheduled_time).first()
             
             if not latest_meeting:
@@ -310,7 +311,7 @@ Need help? Just ask!
     async def find_available_time(self, team_members: List[TeamMember], when_hint: str = None) -> Optional[datetime]:
         """Find available time for team members"""
         # For MVP, use simple logic
-        now = datetime.utcnow()
+    now = utc_now()
         
         if when_hint == "today":
             target_date = now.date()

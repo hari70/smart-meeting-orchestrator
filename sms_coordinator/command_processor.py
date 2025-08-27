@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 from sqlalchemy.orm import Session
 from database.models import TeamMember, Meeting, Team
+from utils.time import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,8 @@ class CommandProcessor:
             
             # Get team members
             team = db.query(Team).filter(Team.id == team_member.team_id).first()
+            if not team:
+                return "Couldn't identify your team. Please ensure you're registered correctly."
             team_members = db.query(TeamMember).filter(TeamMember.team_id == team.id).all()
             
             # Find available time slot
@@ -96,7 +99,7 @@ class CommandProcessor:
                 title=meeting_info["title"],
                 start_time=available_time,
                 duration_minutes=60,
-                attendees=[member.google_calendar_id for member in team_members if member.google_calendar_id],
+                attendees=[getattr(member, 'google_calendar_id') for member in team_members if getattr(member, 'google_calendar_id', None)],
                 meet_link=meet_link
             )
             
@@ -139,7 +142,7 @@ Calendar invites sent to everyone with Google Calendar!
             # Get upcoming meetings for the team
             upcoming_meetings = db.query(Meeting).filter(
                 Meeting.team_id == team_member.team_id,
-                Meeting.scheduled_time > datetime.utcnow()
+                Meeting.scheduled_time > utc_now()
             ).order_by(Meeting.scheduled_time).limit(5).all()
             
             if not upcoming_meetings:
@@ -150,7 +153,7 @@ Calendar invites sent to everyone with Google Calendar!
             for i, meeting in enumerate(upcoming_meetings, 1):
                 time_str = meeting.scheduled_time.strftime("%a %m/%d at %I:%M %p")
                 response += f"{i}. {meeting.title}\n   {time_str}\n"
-                if meeting.google_meet_link:
+                if getattr(meeting, 'google_meet_link', None) is not None:
                     response += f"   🔗 {meeting.google_meet_link}\n"
                 response += "\n"
             
@@ -166,14 +169,14 @@ Calendar invites sent to everyone with Google Calendar!
         try:
             latest_meeting = db.query(Meeting).filter(
                 Meeting.team_id == team_member.team_id,
-                Meeting.scheduled_time > datetime.utcnow()
+                Meeting.scheduled_time > utc_now()
             ).order_by(Meeting.scheduled_time).first()
             
             if not latest_meeting:
                 return "No upcoming meetings to cancel."
             
             # Cancel in Google Calendar if we have event ID
-            if latest_meeting.google_calendar_event_id:
+            if getattr(latest_meeting, 'google_calendar_event_id', None) is not None:
                 await self.calendar_client.delete_event(latest_meeting.google_calendar_event_id)
             
             # Remove from database
@@ -258,11 +261,9 @@ Need help? Just ask!
             logger.error(f"Error extracting meeting info: {str(e)}")
             return None
     
-    async def find_available_time(self, team_members: List[TeamMember], when_hint: str = None) -> Optional[datetime]:
-        """Find available time for team members"""
-        # For MVP, use simple logic
-        now = datetime.utcnow()
-        
+    async def find_available_time(self, team_members: List[TeamMember], when_hint: Optional[str] = None) -> Optional[datetime]:
+        """Find available time for team members (placeholder heuristic)."""
+        now = utc_now()
         if when_hint == "today":
             target_date = now.date()
         elif when_hint == "tomorrow":
@@ -276,8 +277,5 @@ Need help? Just ask!
         else:
             # Default to tomorrow evening
             target_date = (now + timedelta(days=1)).date()
-        
-        # Default to 7 PM
         target_time = datetime.combine(target_date, datetime.min.time().replace(hour=19))
-        
         return target_time
