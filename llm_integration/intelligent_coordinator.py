@@ -203,7 +203,7 @@ RESPONSE STYLE:
         """
         return [
             {
-                "name": "google-calendar:create_gcal_event",
+                "name": "google_calendar_create_gcal_event",
                 "description": "Create a Google Calendar event with Google Meet link",
                 "input_schema": {
                     "type": "object",
@@ -249,7 +249,7 @@ RESPONSE STYLE:
                 }
             },
             {
-                "name": "google-calendar:list_gcal_events",
+                "name": "google_calendar_list_gcal_events",
                 "description": "List Google Calendar events",
                 "input_schema": {
                     "type": "object",
@@ -277,7 +277,7 @@ RESPONSE STYLE:
                 }
             },
             {
-                "name": "google-calendar:update_gcal_event",
+                "name": "google_calendar_update_gcal_event",
                 "description": "Update an existing Google Calendar event",
                 "input_schema": {
                     "type": "object",
@@ -313,7 +313,7 @@ RESPONSE STYLE:
                 }
             },
             {
-                "name": "google-calendar:delete_gcal_event",
+                "name": "google_calendar_delete_gcal_event",
                 "description": "Delete a Google Calendar event",
                 "input_schema": {
                     "type": "object",
@@ -332,7 +332,7 @@ RESPONSE STYLE:
                 }
             },
             {
-                "name": "google-calendar:fetch_gcal_event",
+                "name": "google_calendar_fetch_gcal_event",
                 "description": "Get details of a specific Google Calendar event",
                 "input_schema": {
                     "type": "object",
@@ -351,7 +351,7 @@ RESPONSE STYLE:
                 }
             },
             {
-                "name": "google-calendar:search_gcal_events",
+                "name": "google_calendar_search_gcal_events",
                 "description": "Search for Google Calendar events by query",
                 "input_schema": {
                     "type": "object",
@@ -467,7 +467,7 @@ RESPONSE STYLE:
                 return await self._tool_ask_clarification(tool_input, user, db)
             
             # All Google Calendar MCP tools - delegate to calendar client
-            elif tool_name.startswith("google-calendar:"):
+            elif tool_name.startswith("google_calendar_"):
                 return await self._execute_mcp_tool(tool_name, tool_input)
                 
             else:
@@ -489,7 +489,7 @@ RESPONSE STYLE:
             
             if result and not result.get("error"):
                 # Format success response based on tool type
-                if tool_name == "google-calendar:create_gcal_event":
+                if tool_name == "google_calendar_create_gcal_event":
                     title = result.get("summary", "Meeting")
                     start_time = result.get("start", {}).get("dateTime", "")
                     meet_link = result.get("hangoutLink", "")
@@ -507,7 +507,7 @@ RESPONSE STYLE:
                     meet_text = f" Meet: {meet_link}" if meet_link else ""
                     message = f"✅ {title} scheduled for {formatted_time}!{meet_text}"
                     
-                elif tool_name == "google-calendar:list_gcal_events":
+                elif tool_name == "google_calendar_list_gcal_events":
                     events = result.get("items", []) or result.get("events", [])
                     if not events:
                         message = "📅 No meetings found"
@@ -534,14 +534,14 @@ RESPONSE STYLE:
                         
                         message = f"📅 Upcoming meetings:\n{chr(10).join(event_list)}"
                 
-                elif tool_name == "google-calendar:update_gcal_event":
+                elif tool_name == "google_calendar_update_gcal_event":
                     title = result.get("summary", "Meeting")
                     message = f"✅ {title} has been rescheduled!"
                     
-                elif tool_name == "google-calendar:delete_gcal_event":
+                elif tool_name == "google_calendar_delete_gcal_event":
                     message = "✅ Meeting canceled"
                     
-                elif tool_name == "google-calendar:search_gcal_events":
+                elif tool_name == "google_calendar_search_gcal_events":
                     events = result.get("items", [])
                     if not events:
                         message = "🔍 No matching meetings found"
