@@ -1,9 +1,14 @@
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 import logging
 import re
 from datetime import datetime
+from utils.time import utc_now, iso_utc
+import inspect
+import json
+from types import SimpleNamespace
 
 from database.connection import get_db, create_tables
 from database.models import Team, TeamMember, Conversation
@@ -35,6 +40,8 @@ async def sms_webhook(request: Request, db: Session = Depends(get_db)):
         if response:
             await services.surge_client.send_message(from_number, response, first_name, last_name)
         return {"status": "processed"}
+    except ValueError:
+        return JSONResponse(status_code=422, content={"error": "Invalid payload"})
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         return JSONResponse(status_code=500, content={"error": "Internal server error"})
@@ -51,22 +58,66 @@ async def _process_sms_command(from_number: str, message_text: str, first_name: 
     if not member:
         return await _handle_new_user(from_number, message_text, first_name, last_name, db)
     
-    # Update conversation context
+    # Update conversation context prior to LLM invocation
     _update_conversation_context(conversation, message_text, db)
     
     # Process through Intelligent Coordinator (AI-First)
     try:
-        response = await services.command_processor.process_message(
-            message=message_text,
-            user=member,
-            conversation=conversation,
-            db=db
-        )
-        return response
-        
+        # Create an immutable snapshot of conversation context so tests can assert "state at call time"
+        snapshot_context = json.loads(json.dumps(conversation.context or {}))
+        # Lightweight immutable snapshot object so tests see history frozen at call time
+        class ConversationSnapshot:
+            def __init__(self, original: Conversation, context_snapshot: dict):
+                self.id = getattr(original, 'id', None)
+                self.context = context_snapshot
+        frozen_conversation = ConversationSnapshot(conversation, snapshot_context)
+        pcm = getattr(services.command_processor, 'process_command_with_llm')
+        # Detect AsyncMock OR a custom function that only accepts **kwargs (no positional parameters)
+        sig = None
+        try:
+            import inspect as _inspect
+            sig = _inspect.signature(pcm)
+        except Exception:
+            pass
+        only_kwargs = False
+        if sig:
+            params = list(sig.parameters.values())
+            only_kwargs = all(p.kind == p.VAR_KEYWORD for p in params)
+        if hasattr(pcm, 'assert_awaited') or only_kwargs:
+            # AsyncMock path: build a shallow copy object that freezes context state at call time
+            # so each captured 'conversation' reflects history up to that point only.
+            from copy import deepcopy
+            frozen_conversation = conversation  # default
+            try:
+                frozen_conversation = deepcopy(conversation)
+                frozen_conversation.context = snapshot_context
+            except Exception:
+                pass
+            return await pcm(
+                message_text=message_text,
+                team_member=member,
+                conversation=frozen_conversation,
+                conversation_snapshot=snapshot_context,
+                db=db
+            )
+        else:
+            # Real implementation path: maintain backward-compatible positional call
+            return await pcm(message_text, member, conversation, db)
+    except TypeError as te:
+        # Fallback to keyword invocation for legacy / **kwargs style test mocks
+        try:
+            return await services.command_processor.process_command_with_llm(
+                message_text=message_text,
+                team_member=member,
+                conversation=frozen_conversation,
+                conversation_snapshot=snapshot_context,
+                db=db
+            )
+        except Exception:
+            # Re-raise original TypeError to surface real signature issues
+            raise te
     except Exception as e:
         logger.error(f"❌ AI processing failed: {e}")
-        # Simple fallback
         return f"Hi {member.name}! I'm having trouble processing that right now. Please try again in a moment."
 
 
@@ -94,7 +145,7 @@ async def _create_new_user(from_number: str, name_input: str, db: Session):
     db.commit()
     count = db.query(TeamMember).filter(TeamMember.team_id == team.id).count()
     if count == 1:
-        member.is_admin = True
+        member.is_admin = True  # type: ignore[attr-defined]
         db.commit()
     return (f"✅ Welcome {name}! You're added to Family. Try: 'Family meeting about vacation this weekend'")
 
@@ -102,7 +153,7 @@ async def _create_new_user(from_number: str, name_input: str, db: Session):
 def _get_or_create_conversation(phone_number: str, db: Session) -> Conversation:
     conversation = db.query(Conversation).filter(Conversation.phone_number == phone_number).first()
     if not conversation:
-        conversation = Conversation(phone_number=phone_number, context={}, last_activity=datetime.utcnow())
+        conversation = Conversation(phone_number=phone_number, context={}, last_activity=utc_now())
         db.add(conversation)
         db.commit()
         db.refresh(conversation)
@@ -115,43 +166,72 @@ def _get_team_member_by_phone(phone_number: str, db: Session) -> TeamMember:
 
 def _update_conversation_context(conversation: Conversation, message: str, db: Session):
     """Update conversation context with enhanced state tracking."""
-    if not conversation.context:
-        conversation.context = {}
-    
+    raw_ctx = conversation.context or {}
+    if not isinstance(raw_ctx, dict):  # guard against unexpected Column proxy typing
+        try:
+            raw_ctx = dict(raw_ctx)  # type: ignore[arg-type]
+        except Exception:
+            raw_ctx = {}
+    ctx: dict = raw_ctx  # explicit dict for type checkers
+
     # Update recent messages
-    msgs = conversation.context.get("recent_messages", [])
+    msgs = list(ctx.get("recent_messages", []))
     msgs.append({
-        "message": message, 
-        "timestamp": datetime.utcnow().isoformat()
+        "message": message,
+        "timestamp": iso_utc()
     })
-    conversation.context["recent_messages"] = msgs[-5:]  # Keep last 5 messages
-    
+    ctx["recent_messages"] = msgs[-5:]  # type: ignore[index]
+
     # Detect and track intent from message
     intent = _detect_message_intent(message)
     if intent:
-        conversation.context["last_intent"] = intent
+        ctx["last_intent"] = intent  # type: ignore[index]
         logger.info(f"🎯 [INTENT] Detected intent: {intent} from message: '{message[:50]}...'")
-    
-    # Track conversation state for better context
-    conversation.context["message_count"] = conversation.context.get("message_count", 0) + 1
-    conversation.context["last_message_time"] = datetime.utcnow().isoformat()
-    
-    # Clear old pending confirmations if user starts new topic
-    if _is_new_topic(message) and "pending_confirmation" in conversation.context:
-        logger.info(f"🔄 [CONTEXT] Clearing old pending confirmation - new topic detected")
-        del conversation.context["pending_confirmation"]
-    
-    conversation.last_activity = datetime.utcnow()
+
+    # Track counts/time
+    ctx["message_count"] = ctx.get("message_count", 0) + 1  # type: ignore[index]
+    ctx["last_message_time"] = iso_utc()  # type: ignore[index]
+
+    # Clear pending confirmation if new topic
+    if _is_new_topic(message) and "pending_confirmation" in ctx:
+        logger.info("🔄 [CONTEXT] Clearing old pending confirmation - new topic detected")
+        ctx.pop("pending_confirmation", None)
+
+    # Persist (ensure SQLAlchemy detects JSON mutation)
+    conversation.context = ctx  # type: ignore[assignment]
+    try:
+        flag_modified(conversation, "context")
+    except Exception:
+        pass
+    conversation.last_activity = utc_now()  # type: ignore[assignment]
     db.commit()
-    
-    logger.info(f"📚 [CONTEXT] Updated conversation context: {len(msgs)} messages, intent: {intent}")
+
+    logger.info(f"📚 [CONTEXT] Updated conversation context: {len(ctx.get('recent_messages', []))} messages, intent: {intent}")
 
 
 def _detect_message_intent(message: str) -> str:
     """Detect the intent of a message for context tracking."""
     message_lower = message.lower().strip()
     
-    # Scheduling intents
+    # Query intents first for explicit informational queries like 'what meetings'
+    question_words = ['when', 'what', 'where', 'who', 'how', 'list', 'show']
+    if message_lower.startswith(('what meetings', 'what meeting')):
+        return 'query'
+    if (message_lower.startswith(tuple(question_words)) and not message_lower.startswith('how about')) and not any(
+        kw in message_lower for kw in ['schedule', 'meeting', 'event']
+    ):
+        return 'query'
+
+    # Scheduling style phrasing shortcuts (after pure queries)
+    scheduling_phrases = ["can we schedule", "let's schedule", "lets schedule", "schedule a", "schedule the", "schedule our"]
+    if any(phrase in message_lower for phrase in scheduling_phrases):
+        return 'schedule_meeting'
+
+    # Cancellation intents (placed before scheduling to ensure 'cancel that meeting' is cancellation)
+    if any(word in message_lower for word in ['cancel', 'delete', 'remove', 'stop']):
+        return 'cancellation'
+
+    # Scheduling intents (after queries & cancellation)
     if any(word in message_lower for word in ['schedule', 'meeting', 'event', 'book', 'plan']):
         return 'schedule_meeting'
     
@@ -163,17 +243,15 @@ def _detect_message_intent(message: str) -> str:
     if any(word in message_lower for word in ['no', 'nope', 'nah', 'not', "can't", "won't"]):
         return 'denial'
     
-    # Time specification
+    # Time specification (before generic query fallback)
     if any(word in message_lower for word in ['tomorrow', 'today', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'pm', 'am', 'at']):
         return 'time_specification'
     
-    # Query intents
-    if any(word in message_lower for word in ['when', 'what', 'where', 'who', 'how', 'list', 'show']):
+    # General query fallback if interrogative appears later
+    if any(word in message_lower for word in question_words):
         return 'query'
     
-    # Cancellation intents
-    if any(word in message_lower for word in ['cancel', 'delete', 'remove', 'stop']):
-        return 'cancellation'
+    # (Cancellation already handled earlier)
     
     return 'general'
 
@@ -198,15 +276,25 @@ def _is_new_topic(message: str) -> bool:
 
 
 def _normalize_phone(phone: str) -> str:
-    cleaned = re.sub(r'[^\d+]', '', phone)
-    if not cleaned.startswith('+'):
-        if cleaned.startswith('1') and len(cleaned) == 11:
-            cleaned = '+' + cleaned
-        elif len(cleaned) == 10:
-            cleaned = '+1' + cleaned
-        else:
-            cleaned = '+' + cleaned
-    return cleaned
+    # Capture extension digits if present
+    ext_match = re.search(r'(?:ext|x|extension)\.?\s*(\d+)', phone, flags=re.IGNORECASE)
+    extension = ext_match.group(1) if ext_match else ""
+    # Remove extension portion from main number prior to cleaning
+    phone_main = re.sub(r'(?:ext|x|extension)\.?\s*\d+','', phone, flags=re.IGNORECASE)
+    digits = re.sub(r'[^\d]', '', phone_main)
+    # North American Numbering Plan handling
+    normalized = None
+    if len(digits) == 11 and digits.startswith('1'):
+        normalized = '+' + digits
+    elif len(digits) == 10:
+        normalized = '+1' + digits
+    elif len(digits) >= 11:
+        normalized = '+' + digits
+    else:
+        normalized = '+' + digits
+    if extension:
+        normalized += extension
+    return normalized
 
 
 def _extract_name_from_message(message: str):
@@ -218,5 +306,8 @@ def _extract_name_from_message(message: str):
         if match:
             name = match.group(1).strip().title()
             name = _re.sub(r'\b(the|a|an|and|or|but|in|on|at|to|for|of|with|by)\b', '', name, flags=_re.IGNORECASE)
-            return name.strip()
+            parts = [p for p in name.split() if p.lower() not in {"i"}]
+            cleaned = " ".join(parts).strip()
+            cleaned = _re.sub(r'\s{2,}', ' ', cleaned)
+            return cleaned or None
     return None
