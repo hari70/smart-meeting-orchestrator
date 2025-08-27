@@ -63,6 +63,7 @@ _include_routers(app)
 # Initialize MCP tools with error handling
 try:
     from mcp_integration.mcp_command_processor import MCPCommandProcessor
+    from mcp_integration.registry import set_mcp_processor
     from app.services import surge_client, calendar_client, meet_client, strava_client
     mcp_processor = MCPCommandProcessor(
         sms_client=surge_client,
@@ -70,7 +71,8 @@ try:
         meet_client=meet_client,
         strava_client=strava_client
     )
-    logger.info("🔧 MCP tools initialized")
+    set_mcp_processor(mcp_processor)
+    logger.info("🔧 MCP tools initialized and registered")
 except Exception as e:
     logger.warning(f"⚠️  Failed to initialize MCP tools: {e}")
     mcp_processor = None

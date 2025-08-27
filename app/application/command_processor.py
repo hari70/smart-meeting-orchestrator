@@ -14,10 +14,11 @@ logger = logging.getLogger(__name__)
 
 
 class ModernCommandProcessor:
-    """Modern command processor using Strategy and Command patterns."""
+    """Modern command processor using Strategy and Command patterns with MCP integration."""
     
     def __init__(self, sms_client, calendar_client, meet_client, 
-                 intent_classifier: Optional[IntentClassifier] = None):
+                 intent_classifier: Optional[IntentClassifier] = None,
+                 mcp_processor=None):
         self.sms_client = sms_client
         self.calendar_client = calendar_client
         self.meet_client = meet_client
@@ -31,6 +32,9 @@ class ModernCommandProcessor:
         
         # Initialize handlers
         self._handlers = {}
+        
+        # MCP processor for LLM-powered processing
+        self.mcp_processor = mcp_processor
     
     def _get_repositories(self, db: Session):
         """Lazy initialization of repositories."""
@@ -71,8 +75,22 @@ class ModernCommandProcessor:
             logger.error(f"Modern command error: {e}")
             return "Sorry, I encountered an error processing your request. Please try again."
     
-    # Legacy compatibility method
+    # LLM-powered processing with MCP tools
     async def process_command_with_llm(self, message_text: str, team_member: TeamMember, 
                                      conversation, db: Session) -> str:
-        """Legacy compatibility - delegates to process_command."""
-        return await self.process_command(message_text, team_member, conversation, db)
+        """Process command using MCP tools and LLM for intelligent responses."""
+        try:
+            # Use MCP processor if available
+            if self.mcp_processor and hasattr(self.mcp_processor, 'process_command_with_llm'):
+                logger.info(f"[MCP_CMD] Processing with MCP tools: {message_text[:50]}...")
+                return await self.mcp_processor.process_command_with_llm(
+                    message_text, team_member, conversation, db
+                )
+            else:
+                logger.warning("[MCP_CMD] MCP processor not available, falling back to pattern-based processing")
+                return await self.process_command(message_text, team_member, conversation, db)
+                
+        except Exception as e:
+            logger.error(f"MCP command error: {e}")
+            # Fallback to pattern-based processing
+            return await self.process_command(message_text, team_member, conversation, db)
