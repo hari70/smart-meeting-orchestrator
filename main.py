@@ -65,16 +65,22 @@ try:
     from mcp_integration.mcp_command_processor import MCPCommandProcessor
     from mcp_integration.registry import set_mcp_processor
     from app.services import surge_client, calendar_client, meet_client, strava_client
+    
+    logger.info(f"🔧 Initializing MCP processor with clients: surge={type(surge_client).__name__}, calendar={type(calendar_client).__name__}, meet={type(meet_client).__name__}")
+    
     mcp_processor = MCPCommandProcessor(
         sms_client=surge_client,
         calendar_client=calendar_client,
         meet_client=meet_client,
         strava_client=strava_client
     )
+    
+    logger.info(f"🔧 MCP processor created: {mcp_processor}, llm_enabled={getattr(mcp_processor, 'llm_enabled', 'unknown')}")
+    
     set_mcp_processor(mcp_processor)
     logger.info("🔧 MCP tools initialized and registered")
 except Exception as e:
-    logger.warning(f"⚠️  Failed to initialize MCP tools: {e}")
+    logger.error(f"❌ Failed to initialize MCP tools: {e}", exc_info=True)
     mcp_processor = None
 
 

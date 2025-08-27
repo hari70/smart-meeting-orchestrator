@@ -12,10 +12,12 @@ def set_mcp_processor(processor):
     global _mcp_processor
     _mcp_processor = processor
     if processor:
-        logger.info("🔧 MCP processor registered globally")
+        logger.info(f"🔧 MCP processor registered globally: {processor}, llm_enabled={getattr(processor, 'llm_enabled', 'unknown')}")
     else:
-        logger.warning("⚠️  MCP processor cleared")
+        logger.warning("⚠️  MCP processor cleared (set to None)")
 
 def get_mcp_processor():
     """Get the global MCP processor instance."""
-    return _mcp_processor
+    processor = _mcp_processor
+    logger.debug(f"🔍 Getting MCP processor: {processor}")
+    return processor

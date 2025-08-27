@@ -81,16 +81,18 @@ class ModernCommandProcessor:
         """Process command using MCP tools and LLM for intelligent responses."""
         try:
             # Use MCP processor if available
+            logger.info(f"[MCP_CMD] Checking for MCP processor: {self.mcp_processor}")
+            
             if self.mcp_processor and hasattr(self.mcp_processor, 'process_command_with_llm'):
-                logger.info(f"[MCP_CMD] Processing with MCP tools: {message_text[:50]}...")
+                logger.info(f"[MCP_CMD] Using MCP processor: {self.mcp_processor}, llm_enabled={getattr(self.mcp_processor, 'llm_enabled', 'unknown')}")
                 return await self.mcp_processor.process_command_with_llm(
                     message_text, team_member, conversation, db
                 )
             else:
-                logger.warning("[MCP_CMD] MCP processor not available, falling back to pattern-based processing")
+                logger.warning(f"[MCP_CMD] MCP processor not available: processor={self.mcp_processor}, has_method={hasattr(self.mcp_processor or {}, 'process_command_with_llm')}")
                 return await self.process_command(message_text, team_member, conversation, db)
                 
         except Exception as e:
-            logger.error(f"MCP command error: {e}")
+            logger.error(f"MCP command error: {e}", exc_info=True)
             # Fallback to pattern-based processing
             return await self.process_command(message_text, team_member, conversation, db)

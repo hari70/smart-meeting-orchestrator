@@ -244,6 +244,9 @@ ACTION REQUIRED NOW."""
             title = self._extract_meeting_title(message)
             start_time = self._extract_meeting_time(message)
             
+            if not start_time:
+                return "I couldn't understand the meeting time. Please specify a time like 'tomorrow at 2pm'"
+            
             # Create the event directly
             tool_result = await self._execute_action_tool("create_calendar_event", {
                 "title": title,
@@ -289,7 +292,7 @@ ACTION REQUIRED NOW."""
         
         return "Family Get-Together"
     
-    def _extract_meeting_time(self, message: str) -> datetime:
+    def _extract_meeting_time(self, message: str) -> Optional[datetime]:
         """Extract meeting time from message with proper parsing"""
         
         logger.info(f"🕰️ [MCP DATETIME DEBUG] Original input: '{message}'")
@@ -495,6 +498,9 @@ ACTION REQUIRED NOW."""
             else:
                 start_time = self._extract_meeting_time("tomorrow evening")
             
+            if not start_time:
+                return {"success": False, "error": "Could not parse meeting time"}
+            
             logger.info(f"🗓️ [MCP] CALENDAR EVENT CREATION ATTEMPT:")
             logger.info(f"   Title: {input_data['title']}")
             logger.info(f"   Start time: {start_time}")
@@ -655,8 +661,80 @@ ACTION REQUIRED NOW."""
         }
     
     async def _basic_command_processing(self, message_text: str, team_member, conversation, db) -> str:
-        """Fallback processing"""
-        if self._is_scheduling_request(message_text):
-            return await self._force_calendar_creation(message_text, team_member, db) or "I can help you schedule that! Please provide more details."
-        
-        return "I'm ready to help with scheduling! Try: 'Schedule family meeting tomorrow at 7pm'"
+        """Fallback processing using MCP tools directly when LLM is not available"""
+        try:
+            # Try to use MCP tools directly based on intent
+            if self._is_scheduling_request(message_text):
+                return await self._handle_scheduling_with_tools(message_text, team_member, db)
+            elif self._is_list_request(message_text):
+                return await self._handle_list_with_tools(team_member, db)
+            elif self._is_cancel_request(message_text):
+                return await self._handle_cancel_with_tools(message_text, team_member, db)
+            else:
+                return "I'm ready to help with scheduling! Try: 'Schedule family meeting tomorrow at 7pm'"
+        except Exception as e:
+            logger.error(f"Basic MCP processing error: {e}")
+            return "I'm ready to help with scheduling! Try: 'Schedule family meeting tomorrow at 7pm'"
+
+    def _is_list_request(self, message_text: str) -> bool:
+        """Check if message is requesting to list meetings"""
+        return any(word in message_text.lower() for word in ['list', 'show', 'what', 'upcoming', 'meetings'])
+
+    def _is_cancel_request(self, message_text: str) -> bool:
+        """Check if message is requesting to cancel a meeting"""
+        return any(word in message_text.lower() for word in ['cancel', 'delete', 'remove'])
+
+    async def _handle_scheduling_with_tools(self, message_text: str, team_member, db) -> str:
+        """Handle scheduling using MCP tools directly"""
+        try:
+            # Extract meeting details from message
+            title = self._extract_meeting_title(message_text)
+            start_time = self._extract_meeting_time(message_text)
+            
+            if not title or not start_time:
+                return "I need both a meeting title and time. Try: 'Schedule team meeting tomorrow at 2pm'"
+            
+            # Use calendar client to create event
+            if hasattr(self.calendar_client, 'create_event'):
+                result = await self.calendar_client.create_event(
+                    title=title,
+                    start_time=start_time,
+                    duration_minutes=60,
+                    description=f"Created via SMS by {team_member.name}"
+                )
+                return f"✅ Meeting scheduled: {title} at {start_time}"
+            else:
+                return "Calendar service not available. Please try again later."
+                
+        except Exception as e:
+            logger.error(f"Scheduling with tools error: {e}")
+            return "I encountered an error scheduling your meeting. Please try again."
+
+    async def _handle_list_with_tools(self, team_member, db) -> str:
+        """Handle listing meetings using MCP tools directly"""
+        try:
+            if hasattr(self.calendar_client, 'list_events'):
+                events = await self.calendar_client.list_events(days_ahead=7, limit=5)
+                if events:
+                    response = "📅 Upcoming meetings:\n"
+                    for event in events:
+                        response += f"• {event.get('title', 'Unknown')} at {event.get('start_time', 'Unknown time')}\n"
+                    return response
+                else:
+                    return "No upcoming meetings found."
+            else:
+                return "Calendar service not available. Please try again later."
+                
+        except Exception as e:
+            logger.error(f"Listing with tools error: {e}")
+            return "I encountered an error retrieving your meetings. Please try again."
+
+    async def _handle_cancel_with_tools(self, message_text: str, team_member, db) -> str:
+        """Handle canceling meetings using MCP tools directly"""
+        try:
+            # This is a simplified version - in practice you'd need to identify which meeting to cancel
+            return "To cancel a meeting, please specify which one. For example: 'Cancel the team meeting tomorrow'"
+            
+        except Exception as e:
+            logger.error(f"Canceling with tools error: {e}")
+            return "I encountered an error canceling your meeting. Please try again."
