@@ -71,7 +71,11 @@ async def _process_sms_command(from_number: str, message_text: str, first_name: 
                 self.id = getattr(original, 'id', None)
                 self.context = context_snapshot
         frozen_conversation = ConversationSnapshot(conversation, snapshot_context)
-        pcm = getattr(services.command_processor, 'process_command_with_llm')
+        pcm = getattr(services.command_processor, 'process_command_with_llm', None)
+        if pcm is None:
+            # Fallback if older deploy missing shim
+            logger.warning("process_command_with_llm missing; falling back to process_message")
+            return await services.command_processor.process_message(message_text, member, conversation, db)
         # Detect AsyncMock OR a custom function that only accepts **kwargs (no positional parameters)
         sig = None
         try:
