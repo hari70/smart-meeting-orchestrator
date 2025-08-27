@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 import uuid
 from contextlib import asynccontextmanager
 import logging
+import os
 
 from database.connection import create_tables
 from app.routers import all_routers
@@ -67,6 +68,7 @@ try:
     from app.services import surge_client, calendar_client, meet_client, strava_client
     
     logger.info(f"🔧 Initializing MCP processor with clients: surge={type(surge_client).__name__}, calendar={type(calendar_client).__name__}, meet={type(meet_client).__name__}")
+    logger.info(f"🔧 Environment check - ANTHROPIC_API_KEY present: {bool(os.getenv('ANTHROPIC_API_KEY'))}")
     
     mcp_processor = MCPCommandProcessor(
         sms_client=surge_client,

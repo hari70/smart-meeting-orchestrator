@@ -26,18 +26,29 @@ class MCPCommandProcessor:
         self.strava_client = strava_client
         
         # Initialize Claude client
-        if ANTHROPIC_AVAILABLE and os.getenv("ANTHROPIC_API_KEY"):
-            self.claude_client = anthropic.Anthropic(
-                api_key=os.getenv("ANTHROPIC_API_KEY")
-            )
-            self.llm_enabled = True
-            logger.info("✅ MCP Command Processor with Claude API enabled")
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        logger.info(f"🔍 [MCP INIT] ANTHROPIC_AVAILABLE: {ANTHROPIC_AVAILABLE}")
+        logger.info(f"🔍 [MCP INIT] ANTHROPIC_API_KEY present: {bool(api_key)}")
+        logger.info(f"🔍 [MCP INIT] API_KEY starts with: {api_key[:10] if api_key else 'None'}...")
+        
+        if ANTHROPIC_AVAILABLE and api_key:
+            try:
+                self.claude_client = anthropic.Anthropic(
+                    api_key=api_key
+                )
+                self.llm_enabled = True
+                logger.info("✅ MCP Command Processor with Claude API enabled")
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize Anthropic client: {e}")
+                self.claude_client = None
+                self.llm_enabled = False
         else:
             self.claude_client = None
             self.llm_enabled = False
             if not ANTHROPIC_AVAILABLE:
                 logger.warning("⚠️  Anthropic not available - MCP tools will be limited")
-            elif not os.getenv("ANTHROPIC_API_KEY"):
+            elif not api_key:
+                logger.warning("⚠️  ANTHROPIC_API_KEY not set - MCP tools will be limited")
                 logger.warning("⚠️  ANTHROPIC_API_KEY not set - MCP tools will be limited")
             logger.info("📝 MCP Command Processor without LLM - using basic processing")
     
