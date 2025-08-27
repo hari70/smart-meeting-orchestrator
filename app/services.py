@@ -4,6 +4,7 @@ This avoids circular imports between routers and keeps construction logic
 away from `main.py` for cleaner testing.
 """
 import logging
+from typing import Optional, List, Dict
 from app.config import get_settings
 from sms_coordinator.surge_client import SurgeSMSClient
 from google_integrations.direct_google_calendar import DirectGoogleCalendarClient
@@ -21,6 +22,28 @@ logger = logging.getLogger(__name__)
 class _PlaceholderClient:
     def __init__(self):
         self.enabled = False
+    
+    # MCP processor interface methods
+    async def create_meeting(self, title: str) -> Optional[str]:
+        """Placeholder: Return None for failed meet client"""
+        return None
+    
+    async def create_event(self, title: str, start_time, duration_minutes: int = 60, 
+                          attendees: Optional[List[str]] = None, meet_link: Optional[str] = None) -> Optional[Dict]:
+        """Placeholder: Return None for failed calendar client"""
+        return None
+    
+    async def list_events(self, start_date, end_date) -> List[Dict]:
+        """Placeholder: Return empty list for failed calendar client"""
+        return []
+    
+    async def find_free_time(self, duration_minutes: int, date) -> List[Dict]:
+        """Placeholder: Return empty list for failed calendar client"""
+        return []
+    
+    async def send_message(self, *args, **kwargs):
+        """Placeholder: Do nothing for failed SMS client"""
+        pass
 
 # Initialize external clients
 try:
