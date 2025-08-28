@@ -771,15 +771,31 @@ ACTION REQUIRED NOW."""
                 logger.warning(f"⚠️ [MCP] Meet client unavailable ({e}); using fallback link {meet_link}")
             logger.info(f"✅ [MCP] Meet link ready: {meet_link}")
             
-            # Use the calendar client (which should be RealMCPCalendarClient if enabled)
-            logger.info(f"📅 [MCP] Creating calendar event via calendar client...")
-            event = await self.calendar_client.create_event(
-                title=input_data["title"],
-                start_time=start_time,
-                duration_minutes=input_data.get("duration_minutes", 60),
-                attendees=attendee_emails,  # Now using real attendee emails!
-                meet_link=meet_link
-            )
+            # Use the calendar client (support heterogeneous signatures by using positional args)
+            logger.info(f"📅 [MCP] Creating calendar event via calendar client (positional call)...")
+            duration = input_data.get("duration_minutes", 60)
+            try:
+                event = await self.calendar_client.create_event(
+                    input_data["title"],
+                    start_time,
+                    duration,
+                    attendee_emails,
+                    meet_link
+                )
+            except TypeError as te:
+                # Retry with keyword args as legacy path
+                logger.warning(f"⚠️ [MCP] Positional create_event failed ({te}); retrying with keyword arguments")
+                try:
+                    event = await self.calendar_client.create_event(
+                        title=input_data["title"],
+                        start_time=start_time,
+                        duration_minutes=duration,
+                        attendees=attendee_emails,
+                        meet_link=meet_link
+                    )
+                except Exception as e2:
+                    logger.error(f"❌ [MCP] Calendar create_event failed on both attempts: {e2}")
+                    return {"success": False, "error": f"Calendar client unsupported signature: {e2}"}
             
             logger.info(f"📊 [MCP] Calendar client response: {event}")
             
