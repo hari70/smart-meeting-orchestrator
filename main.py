@@ -203,7 +203,8 @@ import logging
 import os
 
 from database.connection import create_tables
-from app.routers import all_routers
+# Disable old complex routers - using simplified system only
+# from app.routers import all_routers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("startup")
@@ -227,9 +228,9 @@ app = FastAPI(
 )
 
 def _include_routers(app: FastAPI):
-    for router in all_routers:
-        app.include_router(router)
-        app.include_router(router, prefix="/v1")
+    # Old complex routers disabled for simplified system
+    logger.info("✅ Using simplified SMS orchestrator only - no legacy routers")
+    pass
 
 
 @app.middleware("http")
