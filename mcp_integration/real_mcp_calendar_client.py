@@ -13,12 +13,15 @@ class RealMCPCalendarClient:
     def __init__(self):
         """Initialize real MCP calendar client"""
         self.available_tools = []
-        self.mcp_enabled = self._detect_mcp_tools()
+        # Enable only if MCP endpoint configured
+        import os
+        self.mcp_endpoint = os.getenv("RAILWAY_MCP_ENDPOINT")
+        self.mcp_enabled = bool(self.mcp_endpoint)
         
         if self.mcp_enabled:
             logger.info("✅ Real MCP Google Calendar tools detected")
         else:
-            logger.warning("⚠️ MCP Google Calendar tools not available")
+            logger.warning("⚠️ MCP Google Calendar tools disabled (RAILWAY_MCP_ENDPOINT missing) - will rely on direct Google client if available")
     
     def _detect_mcp_tools(self) -> bool:
         """Assume MCP Google Calendar tools are available - user has 8 tools"""
@@ -216,7 +219,7 @@ class RealMCPCalendarClient:
         
         try:
             # Prepare update parameters
-            update_params = {
+            update_params: Dict[str, Any] = {
                 "calendar_id": "primary",
                 "event_id": event_id
             }
@@ -353,6 +356,8 @@ class RealMCPCalendarClient:
         """Call MCP tool directly through the registry (SIMPLE AND RELIABLE)"""
 
         try:
+            if not self.mcp_enabled:
+                return {"error": "MCP disabled (missing RAILWAY_MCP_ENDPOINT)"}
             logger.info(f"🔧 Calling MCP tool directly: {tool_name} with params: {json.dumps(parameters, indent=2)}")
 
             # Call the MCP tool directly through the registry - this is the CORRECT way

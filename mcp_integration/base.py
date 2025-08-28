@@ -51,6 +51,13 @@ tool_registry = ToolRegistry()
 # MCP Tool Definitions for Google Calendar
 def register_google_calendar_mcp_tools():
     """Register the 8 Google Calendar MCP tools that are available in Railway environment"""
+    import os, logging
+    logger = logging.getLogger(__name__)
+
+    mcp_endpoint = os.getenv("RAILWAY_MCP_ENDPOINT")
+    if not mcp_endpoint:
+        logger.info("ℹ️ RAILWAY_MCP_ENDPOINT not set - skipping MCP Google Calendar tool registration (direct API / fallback logic will be used)")
+        return
 
     async def create_gcal_event(**kwargs):
         """Create a Google Calendar event"""
