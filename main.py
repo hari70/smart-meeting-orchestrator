@@ -4,6 +4,7 @@ Clean FastAPI app with single SMS webhook endpoint.
 """
 import os
 import logging
+from datetime import datetime
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -25,15 +26,35 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Initialize clients
-mcp_client = RealMCPCalendarClient()
-sms_client = SurgeSMSClient(
-    api_key=os.getenv("SURGE_SMS_API_KEY") or os.getenv("SURGE_API_KEY") or "",
-    account_id=os.getenv("SURGE_ACCOUNT_ID") or os.getenv("SURGE_SMS_ACCOUNT_ID") or ""
-)
-
-# Initialize the simplified orchestrator
-orchestrator = SimpleSMSOrchestrator(mcp_client, sms_client)
+# Initialize clients with error handling
+try:
+    mcp_client = RealMCPCalendarClient()
+    sms_client = SurgeSMSClient(
+        api_key=os.getenv("SURGE_SMS_API_KEY", ""),
+        account_id=os.getenv("SURGE_ACCOUNT_ID", "")
+    )
+    
+    # Initialize the simplified orchestrator
+    orchestrator = SimpleSMSOrchestrator(mcp_client, sms_client)
+    logger.info("✅ SimpleSMSOrchestrator initialized successfully")
+    
+except Exception as e:
+    logger.error(f"❌ Failed to initialize orchestrator: {e}")
+    # Create a minimal fallback for health checks
+    class MinimalOrchestrator:
+        def __init__(self):
+            self.llm_enabled = False
+            self.mcp_tools = []
+            self.mcp_client = type('obj', (object,), {
+                'mcp_enabled': False,
+                'mcp_endpoint': 'not_configured'
+            })()
+        
+        async def process_sms(self, message, phone, db):
+            return "❌ Service temporarily unavailable - please try again later"
+    
+    orchestrator = MinimalOrchestrator()
+    logger.warning("⚠️ Using minimal orchestrator for deployment")
 
 @app.on_event("startup")
 async def startup_event():
@@ -53,11 +74,23 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "healthy",
-        "mcp_available": orchestrator.mcp_client.mcp_enabled,
-        "llm_available": orchestrator.llm_enabled
-    }
+    """Health check endpoint for Railway deployment"""
+    try:
+        return {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "service": "SMS Meeting Orchestrator",
+            "version": "2.0.0",
+            "mcp_available": orchestrator.mcp_client.mcp_enabled,
+            "llm_available": orchestrator.llm_enabled
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy", 
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 def _normalize_phone(phone: str) -> str:
     """Normalize phone number format"""
