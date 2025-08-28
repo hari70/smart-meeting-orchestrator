@@ -87,6 +87,18 @@ class SimpleSMSOrchestrator:
                 }
             },
             {
+                "name": "search_calendar_events",
+                "description": "Search for calendar events by title or keyword to get event IDs for updating/deleting",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query (event title or keywords)"},
+                        "days_ahead": {"type": "integer", "default": 7, "description": "Days to search ahead"}
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
                 "name": "delete_calendar_event",
                 "description": "Delete a calendar event by ID",
                 "input_schema": {
@@ -170,7 +182,14 @@ CRITICAL RULES:
 3. For scheduling requests, ALWAYS call create_calendar_event
 4. Parse times intelligently (tomorrow = next day, 11am = 11:00, etc)
 5. Convert relative times to ISO format (YYYY-MM-DDTHH:MM:SS)
-6. Call multiple tools if needed (check conflicts first, then create)
+6. For UPDATE/MOVE requests: First call search_calendar_events to find the event, then call update_calendar_event with the event_id
+7. For DELETE requests: First call search_calendar_events to find the event, then call delete_calendar_event with the event_id
+8. Call multiple tools if needed (search first, then update/delete)
+
+SPECIAL HANDLING FOR MOVE/UPDATE REQUESTS:
+- User says "move meeting X to Y" → First: search_calendar_events(query="X"), Then: update_calendar_event(event_id=found_id, start_time="Y")
+- User says "reschedule X" → First: search_calendar_events(query="X"), Then: update_calendar_event with new time
+- User says "cancel/delete X" → First: search_calendar_events(query="X"), Then: delete_calendar_event(event_id=found_id)
 
 Return tool calls in this format - you MUST call tools, not just chat!"""
 
@@ -257,6 +276,12 @@ Return tool calls in this format - you MUST call tools, not just chat!"""
                 result = await self.mcp_client.list_events(
                     days_ahead=tool_input.get("days_ahead", 7),
                     limit=tool_input.get("limit", 10)
+                )
+                
+            elif tool_name == "search_calendar_events":
+                result = await self.mcp_client.search_events(
+                    query=tool_input["query"],
+                    days_ahead=tool_input.get("days_ahead", 7)
                 )
                 
             elif tool_name == "find_free_time":
@@ -349,6 +374,18 @@ Return tool calls in this format - you MUST call tools, not just chat!"""
                 return response.strip()
             else:
                 return "📅 No upcoming events found"
+        
+        elif tool_name == "search_calendar_events":
+            if isinstance(result, list) and result:
+                response = f"🔍 Found {len(result)} events:\n"
+                for event in result[:3]:  # Limit to 3 for SMS
+                    title = event.get("title", "Untitled")
+                    start = event.get("start", "")
+                    event_id = event.get("id", "")
+                    response += f"• {title} - {start} (ID: {event_id[:8]}...)\n"
+                return response.strip()
+            else:
+                return "🔍 No events found matching your search"
         
         elif tool_name == "find_free_time":
             if isinstance(result, list) and result:

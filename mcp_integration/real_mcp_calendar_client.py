@@ -180,15 +180,61 @@ class RealMCPCalendarClient:
                     return await self.fallback_client.list_events(days_ahead=days_ahead, limit=limit)
             
             return []
+    
+    async def search_events(self, query: str, days_ahead: int = 7) -> List[Dict]:
+        """Search for calendar events by title or keyword"""
+        
+        if not self.mcp_enabled:
+            if self.fallback_client:
+                logger.info("📅 Using Direct Google Calendar fallback for search_events")
+                # The fallback client might not have search, so use list and filter
+                events = await self.fallback_client.list_events(days_ahead=days_ahead)
+                # Filter events by query (case insensitive)
+                query_lower = query.lower()
+                filtered = [event for event in events if query_lower in event.get("title", "").lower()]
+                return filtered
+            logger.error("❌ MCP Google Calendar tools not available and no fallback")
+            return []
+
+        try:
+            parameters = {
+                "query": query,
+                "timeMin": datetime.utcnow().isoformat() + 'Z',
+                "timeMax": (datetime.utcnow() + timedelta(days=days_ahead)).isoformat() + 'Z',
+                "singleEvents": True,
+                "orderBy": "startTime"
+            }
+
+            # Call your MCP search_calendar_events tool
+            result = await self._call_mcp_tool("search_calendar_events", parameters)
+            
+            if result and result.get("success"):
+                events = result.get("events", [])
+                logger.info(f"📋 Found {len(events)} events matching '{query}' from MCP")
+                return events
+            else:
+                logger.error(f"❌ MCP search events failed: {result}")
+                # Fall back to list and filter approach
+                if self.fallback_client:
+                    logger.info("🔄 Falling back to Direct Google Calendar for search_events")
+                    events = await self.fallback_client.list_events(days_ahead=days_ahead)
+                    query_lower = query.lower()
+                    filtered = [event for event in events if query_lower in event.get("title", "").lower()]
+                    return filtered
+            
+            return []
             
         except Exception as e:
-            logger.error(f"❌ Error listing MCP events: {e}")
+            logger.error(f"❌ Error searching MCP events: {e}")
             # Fall back to direct client if available
             if self.fallback_client:
-                logger.info("🔄 Falling back to Direct Google Calendar after list_events exception")
-                return await self.fallback_client.list_events(days_ahead=days_ahead, limit=limit)
+                logger.info("🔄 Falling back to Direct Google Calendar after search_events exception")
+                events = await self.fallback_client.list_events(days_ahead=days_ahead)
+                query_lower = query.lower()
+                filtered = [event for event in events if query_lower in event.get("title", "").lower()]
+                return filtered
             return []
-    
+            
     async def find_free_time(self, attendees: List[str], duration_minutes: int = 60, 
                            preferred_times: Optional[List[datetime]] = None) -> Optional[datetime]:
         """Find free time using real MCP tools"""
