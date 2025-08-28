@@ -63,22 +63,20 @@ _include_routers(app)
 
 # Initialize MCP tools with error handling
 try:
-    from mcp_integration.mcp_command_processor import MCPCommandProcessor
+    from application.command_processor import CommandProcessor
+    from interface.bootstrap import bootstrap
     from mcp_integration.registry import set_mcp_processor
-    from app.services import surge_client, calendar_client, meet_client, strava_client
     
-    logger.info(f"🔧 Initializing MCP processor with clients:")
-    logger.info(f"   surge_client: {type(surge_client).__name__} (enabled: {getattr(surge_client, 'enabled', 'unknown')})")
-    logger.info(f"   calendar_client: {type(calendar_client).__name__} (enabled: {getattr(calendar_client, 'enabled', 'unknown')})")
-    logger.info(f"   meet_client: {type(meet_client).__name__} (enabled: {getattr(meet_client, 'enabled', 'unknown')})")
-    logger.info(f"   strava_client: {type(strava_client).__name__ if strava_client else 'None'}")
+    logger.info("🔧 Initializing MCP processor with new modular bootstrap:")
     logger.info(f"🔧 Environment check - ANTHROPIC_API_KEY present: {bool(os.getenv('ANTHROPIC_API_KEY'))}")
     
-    mcp_processor = MCPCommandProcessor(
-        sms_client=surge_client,
-        calendar_client=calendar_client,
-        meet_client=meet_client,
-        strava_client=strava_client
+    boot = bootstrap()
+    # meet_client & strava_client placeholders (could be stubs or future adapters)
+    mcp_processor = CommandProcessor(
+        sms_client=boot.sms_client,
+        calendar_client=boot.calendar_provider,
+        meet_client=None,
+        strava_client=None
     )
     
     logger.info(f"🔧 MCP processor created: {mcp_processor}, llm_enabled={getattr(mcp_processor, 'llm_enabled', 'unknown')}")
