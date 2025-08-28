@@ -251,34 +251,8 @@ async def global_exception_handler(request: Request, exc: Exception):  # pragma:
 
 _include_routers(app)
 
-# Initialize MCP tools with error handling
-try:
-    from application.command_processor import CommandProcessor
-    from google_integrations.meet_client import GoogleMeetClient
-    from interface.bootstrap import bootstrap
-    from mcp_integration.registry import set_mcp_processor
-    
-    logger.info("🔧 Initializing MCP processor with new modular bootstrap:")
-    logger.info(f"🔧 Environment check - ANTHROPIC_API_KEY present: {bool(os.getenv('ANTHROPIC_API_KEY'))}")
-    
-    boot = bootstrap()
-    # meet_client & strava_client placeholders (could be stubs or future adapters)
-    # Provide a real (mock-link generating) Meet client instead of None to avoid AttributeError
-    mcp_processor = CommandProcessor(
-        sms_client=boot.sms_client,
-        calendar_client=boot.calendar_provider,
-        meet_client=GoogleMeetClient(),
-        strava_client=None
-    )
-    
-    logger.info(f"🔧 MCP processor created: {mcp_processor}, llm_enabled={getattr(mcp_processor, 'llm_enabled', 'unknown')}")
-    
-    set_mcp_processor(mcp_processor)
-    logger.info("🔧 MCP tools initialized and registered")
-except Exception as e:
-    logger.error(f"❌ Failed to initialize MCP tools: {e}", exc_info=True)
-    mcp_processor = None
-
+# The simplified system uses SimpleSMSOrchestrator only - no complex fallbacks needed
+logger.info("✅ Using SimpleSMSOrchestrator - clean SMS → LLM → MCP pipeline")
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn

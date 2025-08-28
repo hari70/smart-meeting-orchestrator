@@ -1010,7 +1010,10 @@ ACTION REQUIRED NOW."""
                 if events:
                     response = "📅 Your upcoming meetings:\\n\\n"
                     for i, event in enumerate(events[:3], 1):
-                        response += f"{i}. {event.get('title')}\\n   {event.get('start_time')}\\n\\n"
+                        # Handle both dict and CalendarEvent object formats
+                        title = event.title if hasattr(event, 'title') else event.get('title', 'Untitled')
+                        start_time = event.start_time if hasattr(event, 'start_time') else event.get('start_time', 'Time TBD')
+                        response += f"{i}. {title}\\n   {start_time}\\n\\n"
                     return response.strip()
                 else:
                     return "📅 No upcoming meetings scheduled."

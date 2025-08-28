@@ -326,7 +326,16 @@ Return tool calls in this format - you MUST call tools, not just chat!"""
                     time_str = dt.strftime("%a %b %d at %I:%M %p")
                 except:
                     time_str = start_time
-                return f"✅ Created '{title}' for {time_str}"
+                
+                response = f"✅ Created '{title}' for {time_str}"
+                
+                # Add meet link if available in result
+                if isinstance(result, dict) and result.get("meet_link"):
+                    response += f"\n🔗 Meet: {result['meet_link']}"
+                elif isinstance(result, dict) and result.get("hangout_link"):
+                    response += f"\n🔗 Meet: {result['hangout_link']}"
+                
+                return response
             else:
                 return f"❌ Couldn't create event: {result.get('error', 'Calendar service unavailable')}"
         
@@ -353,16 +362,22 @@ Return tool calls in this format - you MUST call tools, not just chat!"""
                 return "⏰ No free time slots found"
         
         elif tool_name == "delete_calendar_event":
-            if result:
-                return "✅ Event deleted successfully"
+            if result and result.get("success"):
+                deleted_title = result.get("title", "Event")
+                return f"✅ Deleted '{deleted_title}' successfully"
             else:
-                return "❌ Couldn't delete event"
+                return f"❌ Couldn't delete event: {result.get('error', 'Event not found')}"
         
         elif tool_name == "update_calendar_event":
-            if result:
-                return "✅ Event updated successfully"
+            if result and result.get("success"):
+                updated_title = result.get("title", "Event")
+                new_time = result.get("start_time", "")
+                if new_time:
+                    return f"✅ Updated '{updated_title}' to {new_time}"
+                else:
+                    return f"✅ Updated '{updated_title}' successfully"
             else:
-                return "❌ Couldn't update event"
+                return f"❌ Couldn't update event: {result.get('error', 'Event not found')}"
         
         elif tool_name == "check_calendar_conflicts":
             if isinstance(result, list):
