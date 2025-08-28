@@ -61,7 +61,10 @@ class ModernCommandProcessor:
         """Get or create handler for intent."""
         if intent not in self._handlers:
             meeting_repo, team_repo = self._get_repositories(db)
-            
+
+            if meeting_repo is None or team_repo is None:
+                raise RuntimeError("Repositories failed to initialize")
+
             if intent == "schedule_meeting":
                 self._handlers[intent] = ScheduleMeetingHandler(
                     meeting_repo, team_repo, self.calendar_client, self.meet_client
@@ -110,8 +113,13 @@ class ModernCommandProcessor:
                 
                 return result
             else:
-                logger.error(f"[MCP_CMD] MCP processor not available or not LLM-enabled: processor={mcp_processor}")
-                return "❌ MCP processor with LLM support is not available. Please ensure ANTHROPIC_API_KEY is configured in Railway."
+                import os
+                key_present = bool(os.getenv("ANTHROPIC_API_KEY"))
+                logger.error(
+                    f"[MCP_CMD] MCP processor not available or not LLM-enabled: processor={mcp_processor} key_present={key_present}"
+                )
+                hint = "Detected ANTHROPIC_API_KEY in environment" if key_present else "ANTHROPIC_API_KEY missing at runtime"
+                return f"❌ MCP processor with LLM support is not available. {hint}. Restart deployment to ensure env propagated."
                 
         except Exception as e:
             logger.error(f"MCP command error: {e}", exc_info=True)

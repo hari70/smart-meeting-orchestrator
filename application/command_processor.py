@@ -24,3 +24,14 @@ class CommandProcessor:
     async def process_sms(self, text: str, team_member, conversation, db_session):
         # For now route to LLM path directly; later we can add rule-based fallback
         return await self._inner.process_command_with_llm(text, team_member, conversation, db_session)
+
+    async def process_command_with_llm(self, text: str, team_member, conversation, db_session):
+        """Facade compatibility so other components (ModernCommandProcessor) can retrieve an MCP processor from registry."""
+        import os, logging
+        logger = logging.getLogger(__name__)
+        api_present = bool(os.getenv("ANTHROPIC_API_KEY"))
+        if not self.llm_enabled:
+            logger.warning(
+                "LLM disabled in facade: api_present=%s anthropic_imported=%s", api_present, hasattr(self._inner, 'claude_client')
+            )
+        return await self._inner.process_command_with_llm(text, team_member, conversation, db_session)
