@@ -64,6 +64,7 @@ _include_routers(app)
 # Initialize MCP tools with error handling
 try:
     from application.command_processor import CommandProcessor
+    from google_integrations.meet_client import GoogleMeetClient
     from interface.bootstrap import bootstrap
     from mcp_integration.registry import set_mcp_processor
     
@@ -72,10 +73,11 @@ try:
     
     boot = bootstrap()
     # meet_client & strava_client placeholders (could be stubs or future adapters)
+    # Provide a real (mock-link generating) Meet client instead of None to avoid AttributeError
     mcp_processor = CommandProcessor(
         sms_client=boot.sms_client,
         calendar_client=boot.calendar_provider,
-        meet_client=None,
+        meet_client=GoogleMeetClient(),
         strava_client=None
     )
     

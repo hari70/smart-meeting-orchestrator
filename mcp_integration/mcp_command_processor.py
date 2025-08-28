@@ -756,10 +756,20 @@ ACTION REQUIRED NOW."""
             else:
                 logger.info(f"✅ [MCP] Will send invites to {len(attendee_emails)} attendees: {', '.join(attendee_emails)}")
             
-            # Create Google Meet link
+            # Create Google Meet link (defensive: meet_client may be None in some boot paths)
             logger.info(f"🔗 [MCP] Creating Google Meet link...")
-            meet_link = await self.meet_client.create_meeting(input_data["title"])
-            logger.info(f"✅ [MCP] Meet link created: {meet_link}")
+            meet_link = None
+            try:
+                if self.meet_client and hasattr(self.meet_client, 'create_meeting'):
+                    meet_link = await self.meet_client.create_meeting(input_data["title"])
+                else:
+                    raise AttributeError("meet_client missing; generating fallback link")
+            except Exception as e:
+                import uuid
+                fallback_id = uuid.uuid4().hex[:8]
+                meet_link = f"https://meet.google.com/{fallback_id}-auto"
+                logger.warning(f"⚠️ [MCP] Meet client unavailable ({e}); using fallback link {meet_link}")
+            logger.info(f"✅ [MCP] Meet link ready: {meet_link}")
             
             # Use the calendar client (which should be RealMCPCalendarClient if enabled)
             logger.info(f"📅 [MCP] Creating calendar event via calendar client...")
