@@ -43,9 +43,9 @@ class Settings:
         self.google_calendar_id: str = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 
         # Feature flags
-        self.enable_mcp_calendar: bool = os.getenv("ENABLE_MCP_CALENDAR", "false").lower() == "true"
-        self.use_real_mcp_calendar: bool = os.getenv("USE_REAL_MCP_CALENDAR", "false").lower() == "true"
-        self.use_direct_google_calendar: bool = os.getenv("USE_DIRECT_GOOGLE_CALENDAR", "true").lower() == "true"
+        self.enable_mcp_calendar: bool = os.getenv("ENABLE_MCP_CALENDAR", "true").lower() == "true"
+        self.use_real_mcp_calendar: bool = os.getenv("USE_REAL_MCP_CALENDAR", "true").lower() == "true"
+        self.use_direct_google_calendar: bool = os.getenv("USE_DIRECT_GOOGLE_CALENDAR", "false").lower() == "true"
 
         # Debug / Admin protection (future)
         self.admin_api_key: Optional[str] = os.getenv("ADMIN_API_KEY")

@@ -19,6 +19,14 @@ if settings.environment != 'testing':
     settings = get_settings(refresh=True)
 logger = logging.getLogger(__name__)
 
+# Register MCP tools on import
+from mcp_integration.base import register_google_calendar_mcp_tools
+try:
+    register_google_calendar_mcp_tools()
+    logger.info("✅ Google Calendar MCP tools registered successfully")
+except Exception as e:
+    logger.warning(f"⚠️  Failed to register MCP tools: {e}. MCP functionality may be limited.")
+
 # Placeholder / optional clients (kept simple to satisfy tests referencing attributes)
 class _PlaceholderClient:
     def __init__(self):
