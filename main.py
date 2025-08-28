@@ -9,22 +9,16 @@ from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from database.connection import get_db, create_tables
-from database.models import TeamMember, Team
-from simple_sms_orchestrator import SimpleSMSOrchestrator
-from mcp_integration.real_mcp_calendar_client import RealMCPCalendarClient
-from sms_coordinator.surge_client import SurgeSMSClient
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Initialize FastAPI
+# Initialize FastAPI FIRST
 app = FastAPI(
     title="Smart Meeting Orchestrator - Simplified",
     description="SMS frontend for MCP Google Calendar tools",
     version="2.0.0"
 )
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # CRITICAL: Health check endpoint defined first - always works regardless of initialization
 @app.get("/health")
@@ -37,8 +31,27 @@ async def ping():
     """Alternative health check"""
     return "ok"
 
-# Initialize clients with error handling
+# Initialize components with comprehensive error handling
+orchestrator = None
+sms_client = None
+mcp_client = None
+
 try:
+    from database.connection import get_db, create_tables
+    from database.models import TeamMember, Team
+    logger.info("✅ Database imports successful")
+except Exception as e:
+    logger.warning(f"⚠️ Database imports failed: {e}")
+    # Create a mock get_db function
+    def get_db():
+        return None
+
+try:
+    from simple_sms_orchestrator import SimpleSMSOrchestrator
+    from mcp_integration.real_mcp_calendar_client import RealMCPCalendarClient
+    from sms_coordinator.surge_client import SurgeSMSClient
+    
+    # Initialize clients
     mcp_client = RealMCPCalendarClient()
     sms_client = SurgeSMSClient(
         api_key=os.getenv("SURGE_SMS_API_KEY", ""),
