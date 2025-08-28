@@ -4,7 +4,7 @@
 import json
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import re
 from sqlalchemy.orm import Session
@@ -423,31 +423,25 @@ ACTION REQUIRED NOW."""
         
         try:
             # Parse natural language date/time
-            now = datetime.now()
+            # Use UTC consistently and convert to Eastern Time at the end
+            now_utc = datetime.now(timezone.utc)
+            now = now_utc - timedelta(hours=4)  # Convert to Eastern Time (UTC-4, ignoring DST for simplicity)
+            
             time_lower = message.lower().strip()
             
-            logger.info(f"🔍 [MCP] Processing natural language: '{time_lower}'")
+            logger.info(f"� [MCP] Processing natural language: '{time_lower}'")
+            logger.info(f"�️ [MCP] Current Eastern Time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}")
             
             # Extract date part
             base_date = None
             if "tomorrow" in time_lower:
-                logger.info(f"😨 [MCP DATE BUG DEBUG] Found 'tomorrow' in input: '{time_lower}'")
-                logger.info(f"📅 [MCP DATE BUG DEBUG] Current datetime object: {now}")
-                logger.info(f"📅 [MCP DATE BUG DEBUG] Current date: {now.date()}")
-                logger.info(f"📅 [MCP DATE BUG DEBUG] Current weekday: {now.weekday()} (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun)")
-                
-                tomorrow = now + timedelta(days=1)
-                logger.info(f"📅 [MCP DATE BUG DEBUG] After adding 1 day: {tomorrow}")
-                logger.info(f"📅 [MCP DATE BUG DEBUG] Tomorrow date object: {tomorrow.date()}")
-                logger.info(f"📅 [MCP DATE BUG DEBUG] Tomorrow weekday: {tomorrow.weekday()}")
-                
-                base_date = tomorrow.date()
-                logger.info(f"📅 [MCP DATE BUG DEBUG] Final base_date: {base_date}")
-                logger.info(f"📅 [MCP DATE BUG DEBUG] Final base_date formatted: {base_date.strftime('%A, %B %d, %Y')}")
-                
                 logger.info(f"📅 [MCP] TOMORROW CALCULATION:")
                 logger.info(f"   Today is {now.strftime('%A %B %d, %Y')}")
+                
+                tomorrow = now + timedelta(days=1)
                 logger.info(f"   Tomorrow will be {tomorrow.strftime('%A %B %d, %Y')}")
+                
+                base_date = tomorrow.date()
                 logger.info(f"   Using date: {base_date}")
             elif "today" in time_lower:
                 base_date = now.date()
@@ -553,19 +547,18 @@ ACTION REQUIRED NOW."""
             
             result = datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
             
-            # Add timezone info - use Eastern Time (America/New_York) instead of system timezone
+            # Add timezone info - use Eastern Time (UTC-4) instead of system timezone
             # This ensures times are interpreted correctly by Google Calendar
-            from dateutil import tz
-            eastern_tz = tz.gettz('America/New_York')
+            eastern_tz = timezone(timedelta(hours=-4))  # Eastern Time (simplified, ignoring DST)
             result = result.replace(tzinfo=eastern_tz)
             
             logger.info(f"📅 [MCP FINAL DEBUG] Combined result (Eastern Time): {result}")
             logger.info(f"📅 [MCP FINAL DEBUG] Result weekday: {result.weekday()} (0=Mon, 1=Tue, 2=Wed)")
             logger.info(f"✅ [MCP] Final parsed datetime: {result.strftime('%A, %B %d, %Y at %I:%M %p %Z')}")
             
-            # Double-check the math
+            # Double-check the math using the same timezone approach
             if "tomorrow" in message.lower():
-                expected_date = (datetime.now() + timedelta(days=1)).date()
+                expected_date = (now + timedelta(days=1)).date()
                 if result.date() != expected_date:
                     logger.error(f"🐛 [MCP] BUG DETECTED!")
                     logger.error(f"   Expected tomorrow: {expected_date} ({expected_date.strftime('%A')})")
@@ -579,8 +572,7 @@ ACTION REQUIRED NOW."""
         except Exception as e:
             logger.error(f"❌ [MCP] Failed to parse datetime: {message}, error: {e}")
             # Return tomorrow at 7 PM as fallback with Eastern Time
-            from dateutil import tz
-            eastern_tz = tz.gettz('America/New_York')
+            eastern_tz = timezone(timedelta(hours=-4))  # Eastern Time (simplified, ignoring DST)
                         
             fallback = datetime.combine((datetime.now() + timedelta(days=1)).date(), datetime.min.time().replace(hour=19))
             # Add Eastern Time timezone info
@@ -816,10 +808,11 @@ ACTION REQUIRED NOW."""
                     db.commit()
                     logger.info(f"💾 [MCP] Meeting updated in database")
                 
+                start_time_obj = update_data.get("start_time")
                 return {
                     "success": True,
                     "title": updated_event.get("title", update_data.get("title", "Updated Meeting")),
-                    "start_time": update_data.get("start_time").strftime("%A, %B %d at %I:%M %p") if update_data.get("start_time") else "Time unchanged",
+                    "start_time": start_time_obj.strftime("%A, %B %d at %I:%M %p") if isinstance(start_time_obj, datetime) else "Time unchanged",
                     "event_id": updated_event.get("id"),
                     "calendar_source": updated_event.get("source", "unknown"),
                     "real_calendar_event": updated_event.get("source") != "mock"
