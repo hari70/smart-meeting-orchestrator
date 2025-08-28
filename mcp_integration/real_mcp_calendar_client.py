@@ -373,7 +373,7 @@ class RealMCPCalendarClient:
                     # Create temporary coordinator to get tool definitions
                     # Note: We only need the tool definitions, not the full coordinator
                     temp_coordinator = IntelligentCoordinator(None, None, None)  # type: ignore
-                    mcp_tools = temp_coordinator._get_mcp_tools()
+                    mcp_tools = temp_coordinator._define_mcp_tools()
                     
                     # Create a simple message that asks Claude to call the specific tool
                     user_prompt = f"Please call the {tool_name} tool with these exact parameters: {json.dumps(parameters)}"

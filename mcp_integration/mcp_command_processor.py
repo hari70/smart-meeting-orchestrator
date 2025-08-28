@@ -332,13 +332,26 @@ ACTION REQUIRED NOW."""
             # Sort by start time and get the next upcoming meeting
             upcoming_events = []
             for event in events:
-                start_time_str = event.get("start_time")
+                start_time_str = event.get("start_time_iso")  # Use ISO format instead of formatted string
                 if start_time_str:
                     try:
-                        start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
-                        if start_time > datetime.now():
+                        # Parse ISO format with timezone
+                        if start_time_str.endswith('Z'):
+                            start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+                        else:
+                            start_time = datetime.fromisoformat(start_time_str)
+                        
+                        # Convert to UTC for comparison
+                        if start_time.tzinfo is None:
+                            start_time = start_time.replace(tzinfo=timezone.utc)
+                        else:
+                            start_time = start_time.astimezone(timezone.utc)
+                            
+                        now_utc = datetime.now(timezone.utc)
+                        if start_time > now_utc:
                             upcoming_events.append(event)
-                    except:
+                    except Exception as parse_error:
+                        logger.warning(f"⚠️ Failed to parse event time '{start_time_str}': {parse_error}")
                         continue
             
             if not upcoming_events:
@@ -855,7 +868,7 @@ ACTION REQUIRED NOW."""
                     if start_time_str.startswith("20"):  # ISO format
                         start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
                     else:
-                        # Relative time parsing
+                        # Natural language time parsing (e.g., "tomorrow 3pm")
                         start_time = self._extract_meeting_time(start_time_str)
                 else:
                     start_time = self._extract_meeting_time("tomorrow evening")

@@ -277,6 +277,7 @@ class DirectGoogleCalendarClient:
                             "id": event.get("id"),
                             "title": event_title,
                             "start_time": formatted_start_time,
+                            "start_time_iso": start_raw,  # Add ISO format for parsing
                             "meet_link": event.get("hangoutLink"),
                             "calendar_link": event.get("htmlLink")
                         })
@@ -361,9 +362,24 @@ class DirectGoogleCalendarClient:
             
             end_time = start_time + timedelta(minutes=duration_minutes)
             
+            # Convert Eastern Time to UTC for Google Calendar API
+            if start_time.tzinfo is not None:
+                # Convert timezone-aware datetime to UTC
+                from datetime import timezone
+                start_time_utc = start_time.astimezone(timezone.utc)
+                end_time_utc = end_time.astimezone(timezone.utc)
+            else:
+                # Handle naive datetime (assume Eastern Time)
+                import time
+                local_offset = time.timezone if not time.daylight else time.altzone
+                local_tz_offset = timedelta(seconds=-local_offset)
+                from datetime import timezone
+                start_time_utc = start_time.replace(tzinfo=timezone(local_tz_offset)).astimezone(timezone.utc)
+                end_time_utc = end_time.replace(tzinfo=timezone(local_tz_offset)).astimezone(timezone.utc)
+            
             # Query for events during the proposed time
-            time_min = start_time.isoformat() + 'Z'
-            time_max = end_time.isoformat() + 'Z'
+            time_min = start_time_utc.isoformat() + 'Z'
+            time_max = end_time_utc.isoformat() + 'Z'
             
             headers = {"Authorization": f"Bearer {self.access_token}"}
             params = {
@@ -750,23 +766,6 @@ class DirectGoogleCalendarClient:
         except Exception as e:
             logger.error(f"❌ Error refreshing token: {e}")
             return False
-    
-    def _mock_event_response(self, title: str, start_time: datetime, duration_minutes: int, meet_link: Optional[str]) -> Dict:
-        """Return mock response when API not configured"""
-        
-        logger.info(f"📝 [MOCK MODE] Would create: {title} at {start_time.strftime('%A, %B %d at %I:%M %p')}")
-        
-        return {
-            "id": f"mock_{int(start_time.timestamp())}",
-            "title": title,
-            "start_time": start_time.isoformat(),
-            "end_time": (start_time + timedelta(minutes=duration_minutes)).isoformat(),
-            "attendees": [],
-            "meet_link": meet_link or "https://meet.google.com/mock-link",
-            "calendar_link": f"https://calendar.google.com/calendar/u/0/r/day/{start_time.strftime('%Y/%m/%d')}",
-            "source": "mock",
-            "note": "MOCK EVENT - Configure Google Calendar API for real events"
-        }
 
 # Configuration helper for quick setup
 def print_setup_guide():
