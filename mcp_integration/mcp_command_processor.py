@@ -236,6 +236,15 @@ ACTION REQUIRED NOW."""
             if forced_result:
                 return forced_result
         
+        # ENFORCEMENT: If this looks like an update request but no tools were used, FORCE tool usage
+        if self._is_update_request(original_message) and not tool_calls_made:
+            logger.warning(f"⚠️ FORCING UPDATE TOOL USAGE - Claude tried to respond conversationally to: {original_message}")
+            
+            # Force update calendar event
+            forced_result = await self._force_calendar_update(original_message, team_member, db)
+            if forced_result:
+                return forced_result
+        
         # Generate final response based on tool results
         if tool_calls_made:
             return await self._generate_action_confirmation(tool_calls_made, team_member)
@@ -253,6 +262,17 @@ ACTION REQUIRED NOW."""
         
         message_lower = message.lower()
         return any(keyword in message_lower for keyword in scheduling_keywords)
+    
+    def _is_update_request(self, message: str) -> bool:
+        """Detect if message is requesting to update/move/reschedule something"""
+        update_keywords = [
+            "move", "change", "reschedule", "update", "shift", "postpone",
+            "delay", "bring forward", "push back", "adjust", "modify",
+            "rearrange", "relocate", "switch", "transfer"
+        ]
+        
+        message_lower = message.lower()
+        return any(keyword in message_lower for keyword in update_keywords)
     
     async def _force_calendar_creation(self, message: str, team_member, db) -> Optional[str]:
         """Force create a calendar event when Claude didn't use tools"""
@@ -286,6 +306,77 @@ ACTION REQUIRED NOW."""
             
         except Exception as e:
             logger.error(f"❌ Force creation failed: {e}")
+        
+        return None
+    
+    async def _force_calendar_update(self, message: str, team_member, db) -> Optional[str]:
+        """Force update a calendar event when Claude didn't use tools"""
+        
+        try:
+            logger.info(f"🔨 FORCING calendar event update for: {message}")
+            
+            # First, list upcoming events to find the most recent meeting
+            list_result = await self._execute_action_tool("list_upcoming_events", {
+                "days_ahead": 7,
+                "limit": 10
+            }, team_member, db)
+            
+            if not list_result.get("success") or not list_result.get("events"):
+                return "I couldn't find any upcoming meetings to update. Please create a meeting first."
+            
+            # Get the most recent upcoming meeting
+            events = list_result.get("events", [])
+            if not events:
+                return "No upcoming meetings found to update."
+            
+            # Sort by start time and get the next upcoming meeting
+            upcoming_events = []
+            for event in events:
+                start_time_str = event.get("start_time")
+                if start_time_str:
+                    try:
+                        start_time = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+                        if start_time > datetime.now():
+                            upcoming_events.append(event)
+                    except:
+                        continue
+            
+            if not upcoming_events:
+                return "No upcoming meetings found to update."
+            
+            # Sort by start time
+            upcoming_events.sort(key=lambda x: x.get("start_time", ""))
+            target_event = upcoming_events[0]
+            event_id = target_event.get("id")
+            
+            if not event_id:
+                return "I couldn't identify the meeting to update."
+            
+            # Parse message for new time
+            new_start_time = self._extract_meeting_time(message)
+            
+            if not new_start_time:
+                return "I couldn't understand the new meeting time. Please specify a time like 'tomorrow at 2pm'"
+            
+            # Update the event
+            update_result = await self._execute_action_tool("update_calendar_event", {
+                "event_id": event_id,
+                "start_time": new_start_time.isoformat(),
+                "duration_minutes": 60
+            }, team_member, db)
+            
+            if update_result.get("success"):
+                event_data = update_result
+                return f"""✅ Meeting updated!
+
+📅 {event_data.get('title')}
+🕐 {event_data.get('start_time')} (updated)
+🔗 {event_data.get('meet_link', 'Meeting link unchanged')}
+
+✨ Updated automatically via SMS"""
+            
+        except Exception as e:
+            logger.error(f"❌ Force update failed: {e}")
         
         return None
     

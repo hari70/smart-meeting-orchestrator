@@ -19,6 +19,41 @@ class CommandProcessor:
             "schedule_meeting": [
                 r"(?:family|team)?\s*(?:meeting|call)\s+about\s+(.+?)\s+(?:this|next)?\s*(week|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow)",
                 r"schedule\s+(?:call|meeting)\s+with\s+(.+?)\s+(?:this|next)?\s*(week|weekend|today|tomorrow)",
+                r"(?:family|team)\s+(?:meeting|call)\s+(.+)"
+            ],
+            "list_meetings": [
+                r"(?:what|when)(?:'s|'re)?\s+(?:our|my|the)?\s*(?:next|upcoming)?\s*meetings?",
+                r"show\s+(?:my|our)?\s*meetings",
+                r"agenda"
+            ],
+            "cancel_meeting": [
+                r"cancel\s+(?:today's|tomorrow's|the)?\s*(?:meeting|call)",
+                r"(?:delete|remove)\s+meeting"
+            ],
+            "move_meeting": [
+                r"move\s+(?:the|our|my)?\s*(?:meeting|call)",
+                r"reschedule\s+(?:the|our|my)?\s*(?:meeting|call)",
+                r"change\s+(?:the|our|my)?\s*(?:meeting|call)",
+                r"update\s+(?:the|our|my)?\s*(?:meeting|call)"
+            ],
+            "availability": [
+                r"(?:when|what time)\s+(?:is|are)\s+(?:we|everyone)\s+(?:free|available)",
+                r"find\s+time\s+for\s+(?:meeting|call)",
+                r"availability"
+            ]
+        }
+
+class CommandProcessor:
+    def __init__(self, sms_client, calendar_client, meet_client):
+        self.sms_client = sms_client
+        self.calendar_client = calendar_client
+        self.meet_client = meet_client
+        
+        # Command patterns
+        self.patterns = {
+            "schedule_meeting": [
+                r"(?:family|team)?\s*(?:meeting|call)\s+about\s+(.+?)\s+(?:this|next)?\s*(week|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow)",
+                r"schedule\s+(?:call|meeting)\s+with\s+(.+?)\s+(?:this|next)?\s*(week|weekend|today|tomorrow)",
                 r"(?:family|team)\s+(?:call|meeting)\s+(.+)"
             ],
             "list_meetings": [
@@ -53,6 +88,8 @@ class CommandProcessor:
                 return await self.handle_list_meetings(team_member, db)
             elif command_type == "cancel_meeting":
                 return await self.handle_cancel_meeting(message_text, team_member, db)
+            elif command_type == "move_meeting":
+                return await self.handle_move_meeting(message_text, team_member, db)
             elif command_type == "availability":
                 return await self.handle_check_availability(team_member, db)
             else:
@@ -189,6 +226,47 @@ Calendar invites sent to everyone with Google Calendar!
             logger.error(f"Error cancelling meeting: {str(e)}")
             return "Sorry, I couldn't cancel the meeting. Please try again."
     
+    async def handle_move_meeting(self, message: str, team_member: TeamMember, db: Session) -> str:
+        """Handle meeting move/reschedule requests"""
+        try:
+            # For MVP, let's handle the most recent meeting
+            latest_meeting = db.query(Meeting).filter(
+                Meeting.team_id == team_member.team_id,
+                Meeting.scheduled_time > utc_now()
+            ).order_by(Meeting.scheduled_time).first()
+            
+            if not latest_meeting:
+                return "No upcoming meetings to move."
+            
+            # Extract new time from message
+            new_time = self._extract_meeting_time(message)
+            
+            if not new_time:
+                return "I couldn't understand the new time. Please specify a time like 'move the meeting to tomorrow at 2pm' or 'reschedule to next week at 3pm'."
+            
+            # Update in Google Calendar if we have event ID
+            if getattr(latest_meeting, 'google_calendar_event_id', None) is not None:
+                # Calculate new end time (assuming 1 hour duration)
+                duration_minutes = 60
+                new_end_time = new_time + timedelta(minutes=duration_minutes)
+                
+                await self.calendar_client.update_event(
+                    latest_meeting.google_calendar_event_id,
+                    start_time=new_time,
+                    duration_minutes=duration_minutes
+                )
+            
+            # Update in database
+            latest_meeting.scheduled_time = new_time
+            db.commit()
+            
+            time_str = new_time.strftime("%a %m/%d at %I:%M %p")
+            return f"✅ Moved meeting!\n\n📅 {latest_meeting.title}\n🕐 {time_str}"
+            
+        except Exception as e:
+            logger.error(f"Error moving meeting: {str(e)}")
+            return "Sorry, I couldn't move the meeting. Please try again."
+    
     async def handle_check_availability(self, team_member: TeamMember, db: Session) -> str:
         """Handle availability check requests"""
         # For MVP, return a simple message
@@ -207,6 +285,10 @@ Calendar invites sent to everyone with Google Calendar!
 • "What's our next meeting?"
 • "Show my meetings"
 
+🔄 Move meetings:
+• "Move the meeting to tomorrow at 2pm"
+• "Reschedule to next week at 3pm"
+
 ❌ Cancel meetings:
 • "Cancel today's meeting"
 
@@ -214,6 +296,68 @@ Need help? Just ask!
         """.strip()
         
         return help_text
+    
+    def _extract_meeting_time(self, message: str) -> Optional[datetime]:
+        """Extract meeting time from message (simple implementation)"""
+        try:
+            message_lower = message.lower()
+            now = utc_now()
+            
+            # Simple time patterns
+            time_patterns = [
+                r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)",
+                r"(\d{1,2})(?::(\d{2}))?\s*(a\.m\.|p\.m\.)",
+                r"(\d{1,2})\s*(am|pm)",
+                r"(\d{1,2})\s*(a\.m\.|p\.m\.)"
+            ]
+            
+            hour = None
+            minute = 0
+            am_pm = None
+            
+            for pattern in time_patterns:
+                match = re.search(pattern, message_lower)
+                if match:
+                    hour = int(match.group(1))
+                    if match.group(2):
+                        minute = int(match.group(2))
+                    if match.group(3):
+                        am_pm = match.group(3).lower()
+                    break
+            
+            if hour is None:
+                return None
+            
+            # Convert to 24-hour format
+            if am_pm in ['pm', 'p.m.'] and hour != 12:
+                hour += 12
+            elif am_pm in ['am', 'a.m.'] and hour == 12:
+                hour = 0
+            
+            # Determine date
+            if "tomorrow" in message_lower:
+                base_date = (now + timedelta(days=1)).date()
+            elif "today" in message_lower:
+                base_date = now.date()
+            elif "weekend" in message_lower or "saturday" in message_lower:
+                days_until_saturday = (5 - now.weekday()) % 7
+                if days_until_saturday == 0:
+                    days_until_saturday = 7
+                base_date = (now + timedelta(days=days_until_saturday)).date()
+            elif "sunday" in message_lower:
+                days_until_sunday = (6 - now.weekday()) % 7
+                if days_until_sunday == 0:
+                    days_until_sunday = 7
+                base_date = (now + timedelta(days=days_until_sunday)).date()
+            else:
+                # Default to tomorrow
+                base_date = (now + timedelta(days=1)).date()
+            
+            return datetime.combine(base_date, datetime.min.time().replace(hour=hour, minute=minute))
+            
+        except Exception as e:
+            logger.error(f"Error extracting time: {str(e)}")
+            return None
     
     def extract_meeting_info(self, message: str) -> Optional[Dict]:
         """Extract meeting information from message"""
