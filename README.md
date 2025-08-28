@@ -17,11 +17,25 @@ Family SMS → Surge SMS → SMS Coordination MCP → Multiple AI Tools → Resp
 ```
 
 **MCP Server Stack:**
-- **SMS Coordination MCP** - Main hub (routes commands, manages conversations)
-- **Google Meet MCP** - Creates meeting links
-- **Meeting Intelligence MCP** - Learns patterns, generates smart agendas
-- **Google Calendar MCP** - Scheduling and availability (coming soon)
-- **Strava MCP** - Fitness context for optimal meeting times (integration ready)
+
+## New Modular Layout
+
+Layered directories introduced for clarity:
+
+```
+core/                # Domain models (e.g., CalendarEvent)
+application/         # Use case orchestration (future command handlers)
+adapters/            # External service adapters (MCP calendar, SMS, LLM)
+interface/           # Entry / presentation layer wiring
+legacy/              # Archived exploratory scripts (old main_* variants)
+```
+
+Set required environment:
+
+```
+export RAILWAY_MCP_ENDPOINT="https://helpful-solace-production.up.railway.app"
+export RAILWAY_API_TOKEN="<token-if-required>"
+```
 
 ## 🚀 Quick Start
 
