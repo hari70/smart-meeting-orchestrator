@@ -1,9 +1,199 @@
-"""FastAPI application entrypoint (modular, minimal).
-
-All endpoints live in app/routers; shared singletons in app/services.
-Updated: 2024-12-26 - Anthropic SDK v0.64.0 with tool calling support
-Fixed: f-string formatting error with JSON content - v4 (ACTUAL FIX)
 """
+Simple SMS → LLM → MCP Google Calendar System
+Clean FastAPI app with single SMS webhook endpoint.
+"""
+import os
+import logging
+from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+
+from database.connection import get_db, create_tables
+from database.models import TeamMember, Team
+from simple_sms_orchestrator import SimpleSMSOrchestrator
+from mcp_integration.real_mcp_calendar_client import RealMCPCalendarClient
+from sms_coordinator.surge_client import SurgeSMSClient
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Initialize FastAPI
+app = FastAPI(
+    title="Smart Meeting Orchestrator - Simplified",
+    description="SMS frontend for MCP Google Calendar tools",
+    version="2.0.0"
+)
+
+# Initialize clients
+mcp_client = RealMCPCalendarClient()
+sms_client = SurgeSMSClient(
+    api_key=os.getenv("SURGE_SMS_API_KEY") or os.getenv("SURGE_API_KEY") or "",
+    account_id=os.getenv("SURGE_ACCOUNT_ID") or os.getenv("SURGE_SMS_ACCOUNT_ID") or ""
+)
+
+# Initialize the simplified orchestrator
+orchestrator = SimpleSMSOrchestrator(mcp_client, sms_client)
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database"""
+    create_tables()
+    logger.info("🚀 Simple Smart Meeting Orchestrator started")
+
+@app.get("/")
+async def root():
+    return {
+        "name": "Smart Meeting Orchestrator - Simplified",
+        "description": "SMS → LLM → MCP Google Calendar",
+        "version": "2.0.0",
+        "mcp_enabled": orchestrator.mcp_client.mcp_enabled,
+        "llm_enabled": orchestrator.llm_enabled
+    }
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "mcp_available": orchestrator.mcp_client.mcp_enabled,
+        "llm_available": orchestrator.llm_enabled
+    }
+
+def _normalize_phone(phone: str) -> str:
+    """Normalize phone number format"""
+    phone = phone.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if not phone.startswith("+"):
+        if phone.startswith("1"):
+            phone = "+" + phone
+        else:
+            phone = "+1" + phone
+    return phone
+
+def _get_or_create_team_member(phone: str, first_name: str, last_name: str, db: Session) -> TeamMember:
+    """Get existing team member or create new one"""
+    
+    # Look for existing member
+    member = db.query(TeamMember).filter(TeamMember.phone == phone).first()
+    if member:
+        return member
+    
+    # Create new member
+    name = f"{first_name} {last_name}".strip() or "Unknown User"
+    
+    # Create or get default team
+    team = db.query(Team).first()
+    if not team:
+        team = Team(name="Default Team")
+        db.add(team)
+        db.commit()
+        db.refresh(team)
+    
+    member = TeamMember(
+        name=name,
+        phone=phone,
+        team_id=team.id
+    )
+    db.add(member)
+    db.commit()
+    db.refresh(member)
+    
+    logger.info(f"👤 Created new team member: {name} ({phone})")
+    return member
+
+@app.post("/webhook/sms")
+async def sms_webhook(request: Request, db: Session = Depends(get_db)):
+    """Single SMS webhook endpoint - SMS → LLM → MCP → Response"""
+    
+    try:
+        # Parse incoming SMS payload
+        payload = await request.json()
+        logger.info(f"📱 Incoming SMS webhook: {payload}")
+        
+        # Handle different payload formats (Surge SMS)
+        event_type = payload.get("type", payload.get("event", ""))
+        if event_type not in ["message.received"]:
+            logger.info(f"Ignoring non-message event: {event_type}")
+            return {"status": "ignored"}
+        
+        # Extract message data (handle both formats)
+        message_data = payload.get("data", payload.get("message", {}))
+        conversation_data = message_data.get("conversation", {})
+        contact_data = conversation_data.get("contact", {})
+        
+        # Get SMS details
+        from_number = contact_data.get("phone_number", "").strip()
+        message_text = message_data.get("body", "").strip()
+        first_name = contact_data.get("first_name", "")
+        last_name = contact_data.get("last_name", "")
+        
+        if not from_number or not message_text:
+            logger.warning("Invalid SMS payload - missing phone or message")
+            return JSONResponse(
+                status_code=400, 
+                content={"error": "Invalid SMS payload"}
+            )
+        
+        # Normalize phone number
+        from_number = _normalize_phone(from_number)
+        
+        # Get or create team member
+        member = _get_or_create_team_member(from_number, first_name, last_name, db)
+        
+        # Process SMS through simplified orchestrator
+        logger.info(f"🎯 Processing: '{message_text}' from {member.name}")
+        response_text = await orchestrator.process_sms(
+            message=message_text,
+            user_phone=from_number,
+            user_name=str(member.name),
+            db=db
+        )
+        
+        # Send SMS response
+        if response_text:
+            await sms_client.send_message(from_number, response_text, first_name, last_name)
+            logger.info(f"📤 Sent SMS response to {member.name}")
+        
+        return {"status": "processed"}
+        
+    except Exception as e:
+        logger.error(f"❌ SMS webhook error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Internal server error"}
+        )
+
+@app.get("/debug/status")
+async def debug_status():
+    """Debug endpoint to check system status"""
+    return {
+        "system": "Simple SMS Orchestrator",
+        "components": {
+            "mcp_client": {
+                "type": "RealMCPCalendarClient",
+                "mcp_enabled": orchestrator.mcp_client.mcp_enabled,
+                "endpoint": orchestrator.mcp_client.mcp_endpoint
+            },
+            "llm_client": {
+                "type": "Claude 3.5 Sonnet",
+                "enabled": orchestrator.llm_enabled
+            },
+            "sms_client": {
+                "type": "SurgeSMSClient", 
+                "api_key_set": bool(sms_client.api_key)
+            }
+        },
+        "available_tools": len(orchestrator.mcp_tools),
+        "environment": {
+            "anthropic_api_key": bool(os.getenv("ANTHROPIC_API_KEY")),
+            "railway_mcp_endpoint": bool(os.getenv("RAILWAY_MCP_ENDPOINT")),
+            "surge_api_key": bool(os.getenv("SURGE_SMS_API_KEY") or os.getenv("SURGE_API_KEY"))
+        }
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
