@@ -16,12 +16,20 @@ class RealMCPCalendarClient:
         # Enable only if MCP endpoint configured
         import os
         self.mcp_endpoint = os.getenv("RAILWAY_MCP_ENDPOINT")
-        # New directive: ALWAYS use MCP (no direct fallback). Mark enabled regardless of endpoint presence to keep code paths consistent.
-        self.mcp_enabled = True
+        # Fallback to DirectGoogleCalendarClient if MCP endpoint not available
+        self.mcp_enabled = bool(self.mcp_endpoint)
         if not self.mcp_endpoint:
-            logger.warning("⚠️ RAILWAY_MCP_ENDPOINT missing at init; MCP calls will fail until it's set, but fallback is intentionally removed.")
+            logger.warning("⚠️ RAILWAY_MCP_ENDPOINT missing; falling back to DirectGoogleCalendarClient")
+            try:
+                from google_integrations.direct_google_calendar import DirectGoogleCalendarClient
+                self.fallback_client = DirectGoogleCalendarClient()
+                logger.info("✅ Direct Google Calendar fallback initialized")
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize Direct Google Calendar fallback: {e}")
+                self.fallback_client = None
         else:
             logger.info("✅ Real MCP Google Calendar endpoint configured")
+            self.fallback_client = None
     
     def _detect_mcp_tools(self) -> bool:
         """Assume MCP Google Calendar tools are available - user has 8 tools"""
@@ -35,7 +43,13 @@ class RealMCPCalendarClient:
         """Create calendar event using real MCP tools"""
         
         if not self.mcp_enabled:
-            logger.error("❌ MCP Google Calendar tools not available")
+            if self.fallback_client:
+                logger.info("📅 Using Direct Google Calendar fallback for create_event")
+                return await self.fallback_client.create_event(
+                    title=title, start_time=start_time, duration_minutes=duration_minutes,
+                    attendees=attendees, meet_link=meet_link
+                )
+            logger.error("❌ MCP Google Calendar tools not available and no fallback")
             return None
         
         try:
@@ -85,16 +99,35 @@ class RealMCPCalendarClient:
                 }
             else:
                 logger.error(f"❌ MCP tool failed: {event_data}")
+                # Fall back to direct client if available
+                if self.fallback_client:
+                    logger.info("🔄 Falling back to Direct Google Calendar after MCP failure")
+                    return await self.fallback_client.create_event(
+                        title=title, start_time=start_time, duration_minutes=duration_minutes,
+                        attendees=attendees, meet_link=meet_link
+                    )
                 return None
                 
         except Exception as e:
             logger.error(f"❌ Error creating MCP calendar event: {e}")
+            # Fall back to direct client if available
+            if self.fallback_client:
+                logger.info("🔄 Falling back to Direct Google Calendar after MCP exception")
+                return await self.fallback_client.create_event(
+                    title=title, start_time=start_time, duration_minutes=duration_minutes,
+                    attendees=attendees, meet_link=meet_link
+                )
             return None
     
     async def list_events(self, days_ahead: int = 7, limit: int = 10) -> List[Dict]:
         """List events using real MCP tools"""
         
-    # Always proceed (MCP-only architecture). Errors handled per-call.
+        if not self.mcp_enabled:
+            if self.fallback_client:
+                logger.info("📅 Using Direct Google Calendar fallback for list_events")
+                return await self.fallback_client.list_events(days_ahead=days_ahead, limit=limit)
+            logger.error("❌ MCP Google Calendar tools not available and no fallback")
+            return []
         
         try:
             now = datetime.utcnow()
@@ -139,11 +172,21 @@ class RealMCPCalendarClient:
                         })
                 
                 return formatted_events
+            else:
+                logger.error(f"❌ MCP list events failed: {events_data}")
+                # Fall back to direct client if available
+                if self.fallback_client:
+                    logger.info("🔄 Falling back to Direct Google Calendar for list_events")
+                    return await self.fallback_client.list_events(days_ahead=days_ahead, limit=limit)
             
             return []
             
         except Exception as e:
             logger.error(f"❌ Error listing MCP events: {e}")
+            # Fall back to direct client if available
+            if self.fallback_client:
+                logger.info("🔄 Falling back to Direct Google Calendar after list_events exception")
+                return await self.fallback_client.list_events(days_ahead=days_ahead, limit=limit)
             return []
     
     async def find_free_time(self, attendees: List[str], duration_minutes: int = 60, 
