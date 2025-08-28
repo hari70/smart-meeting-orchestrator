@@ -50,7 +50,7 @@ except Exception as e:
                 'mcp_endpoint': 'not_configured'
             })()
         
-        async def process_sms(self, message, phone, db):
+        async def process_sms(self, message, user_phone, user_name, db):
             return "❌ Service temporarily unavailable - please try again later"
     
     orchestrator = MinimalOrchestrator()
@@ -68,8 +68,8 @@ async def root():
         "name": "Smart Meeting Orchestrator - Simplified",
         "description": "SMS → LLM → MCP Google Calendar",
         "version": "2.0.0",
-        "mcp_enabled": orchestrator.mcp_client.mcp_enabled,
-        "llm_enabled": orchestrator.llm_enabled
+        "mcp_enabled": getattr(orchestrator.mcp_client, 'mcp_enabled', False),
+        "llm_enabled": getattr(orchestrator, 'llm_enabled', False)
     }
 
 @app.get("/health")
@@ -81,8 +81,8 @@ async def health_check():
             "timestamp": datetime.now().isoformat(),
             "service": "SMS Meeting Orchestrator",
             "version": "2.0.0",
-            "mcp_available": orchestrator.mcp_client.mcp_enabled,
-            "llm_available": orchestrator.llm_enabled
+            "mcp_available": getattr(orchestrator.mcp_client, 'mcp_enabled', False),
+            "llm_available": getattr(orchestrator, 'llm_enabled', False)
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -203,19 +203,19 @@ async def debug_status():
         "components": {
             "mcp_client": {
                 "type": "RealMCPCalendarClient",
-                "mcp_enabled": orchestrator.mcp_client.mcp_enabled,
-                "endpoint": orchestrator.mcp_client.mcp_endpoint
+                "mcp_enabled": getattr(orchestrator.mcp_client, 'mcp_enabled', False),
+                "endpoint": getattr(orchestrator.mcp_client, 'mcp_endpoint', 'not_configured')
             },
             "llm_client": {
                 "type": "Claude 3.5 Sonnet",
-                "enabled": orchestrator.llm_enabled
+                "enabled": getattr(orchestrator, 'llm_enabled', False)
             },
             "sms_client": {
                 "type": "SurgeSMSClient", 
-                "api_key_set": bool(sms_client.api_key)
+                "api_key_set": bool(getattr(sms_client, 'api_key', ''))
             }
         },
-        "available_tools": len(orchestrator.mcp_tools),
+        "available_tools": len(getattr(orchestrator, 'mcp_tools', [])),
         "environment": {
             "anthropic_api_key": bool(os.getenv("ANTHROPIC_API_KEY")),
             "railway_mcp_endpoint": bool(os.getenv("RAILWAY_MCP_ENDPOINT")),
