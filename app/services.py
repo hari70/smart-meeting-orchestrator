@@ -96,6 +96,13 @@ try:
         sms_client=surge_client,
         mcp_processor=None  # Will be fetched dynamically from registry
     )
+    # Auto-refresh LLM status if key available after instantiation
+    import os
+    if os.getenv('ANTHROPIC_API_KEY') and not getattr(command_processor, 'llm_enabled', False):
+        try:
+            command_processor.refresh_llm_status()
+        except Exception:
+            pass
     logger.info("🤖 Modern Command Processor ready - Clean Architecture with Strategy/Command patterns and MCP integration")
 except Exception as e:
     logger.warning(f"⚠️  Failed to initialize ModernCommandProcessor: {e}. Falling back to basic processor.")

@@ -69,7 +69,7 @@ def register_google_calendar_mcp_tools():
         # Get Railway MCP endpoint from environment
         mcp_endpoint = os.getenv("RAILWAY_MCP_ENDPOINT")
         if not mcp_endpoint:
-            raise ValueError("RAILWAY_MCP_ENDPOINT not configured")
+            return {"error": "MCP endpoint missing", "detail": "Set RAILWAY_MCP_ENDPOINT to enable calendar tools"}
 
         # Call the actual MCP tool
         response = requests.post(
@@ -94,7 +94,7 @@ def register_google_calendar_mcp_tools():
 
         mcp_endpoint = os.getenv("RAILWAY_MCP_ENDPOINT")
         if not mcp_endpoint:
-            raise ValueError("RAILWAY_MCP_ENDPOINT not configured")
+            return {"error": "MCP endpoint missing", "detail": "Set RAILWAY_MCP_ENDPOINT to enable calendar tools"}
 
         response = requests.post(
             f"{mcp_endpoint}/tools/invoke",
@@ -118,7 +118,7 @@ def register_google_calendar_mcp_tools():
 
         mcp_endpoint = os.getenv("RAILWAY_MCP_ENDPOINT")
         if not mcp_endpoint:
-            raise ValueError("RAILWAY_MCP_ENDPOINT not configured")
+            return {"error": "MCP endpoint missing", "detail": "Set RAILWAY_MCP_ENDPOINT to enable calendar tools"}
 
         response = requests.post(
             f"{mcp_endpoint}/tools/invoke",
@@ -142,7 +142,7 @@ def register_google_calendar_mcp_tools():
 
         mcp_endpoint = os.getenv("RAILWAY_MCP_ENDPOINT")
         if not mcp_endpoint:
-            raise ValueError("RAILWAY_MCP_ENDPOINT not configured")
+            return {"error": "MCP endpoint missing", "detail": "Set RAILWAY_MCP_ENDPOINT to enable calendar tools"}
 
         response = requests.post(
             f"{mcp_endpoint}/tools/invoke",
@@ -166,7 +166,7 @@ def register_google_calendar_mcp_tools():
 
         mcp_endpoint = os.getenv("RAILWAY_MCP_ENDPOINT")
         if not mcp_endpoint:
-            raise ValueError("RAILWAY_MCP_ENDPOINT not configured")
+            return {"error": "MCP endpoint missing", "detail": "Set RAILWAY_MCP_ENDPOINT to enable calendar tools"}
 
         response = requests.post(
             f"{mcp_endpoint}/tools/invoke",
@@ -190,7 +190,7 @@ def register_google_calendar_mcp_tools():
 
         mcp_endpoint = os.getenv("RAILWAY_MCP_ENDPOINT")
         if not mcp_endpoint:
-            raise ValueError("RAILWAY_MCP_ENDPOINT not configured")
+            return {"error": "MCP endpoint missing", "detail": "Set RAILWAY_MCP_ENDPOINT to enable calendar tools"}
 
         response = requests.post(
             f"{mcp_endpoint}/tools/invoke",
@@ -214,7 +214,7 @@ def register_google_calendar_mcp_tools():
 
         mcp_endpoint = os.getenv("RAILWAY_MCP_ENDPOINT")
         if not mcp_endpoint:
-            raise ValueError("RAILWAY_MCP_ENDPOINT not configured")
+            return {"error": "MCP endpoint missing", "detail": "Set RAILWAY_MCP_ENDPOINT to enable calendar tools"}
 
         response = requests.post(
             f"{mcp_endpoint}/tools/invoke",
@@ -238,7 +238,7 @@ def register_google_calendar_mcp_tools():
 
         mcp_endpoint = os.getenv("RAILWAY_MCP_ENDPOINT")
         if not mcp_endpoint:
-            raise ValueError("RAILWAY_MCP_ENDPOINT not configured")
+            return {"error": "MCP endpoint missing", "detail": "Set RAILWAY_MCP_ENDPOINT to enable calendar tools"}
 
         response = requests.post(
             f"{mcp_endpoint}/tools/invoke",

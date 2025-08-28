@@ -364,8 +364,10 @@ class RealMCPCalendarClient:
             # Call the MCP tool directly through the registry - this is the CORRECT way
             from mcp_integration.base import tool_registry
             result = await tool_registry.call(tool_name, **parameters)
-
-            logger.info(f"✅ MCP tool {tool_name} executed successfully")
+            if isinstance(result, dict) and result.get("error") == "MCP endpoint missing":
+                logger.error("❌ MCP endpoint missing at runtime for tool %s", tool_name)
+            else:
+                logger.info(f"✅ MCP tool {tool_name} executed successfully")
             return result
 
         except ValueError as e:

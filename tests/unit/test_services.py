@@ -114,6 +114,9 @@ class TestServiceDependencies:
     def test_llm_integration_status(self):
         """Test LLM integration enablement status."""
         processor = services.command_processor
+        # Ensure refresh in case env applied after module import
+        if hasattr(processor, 'refresh_llm_status'):
+            processor.refresh_llm_status()
         
         # Should indicate whether LLM is enabled
         assert hasattr(processor, 'llm_enabled')
