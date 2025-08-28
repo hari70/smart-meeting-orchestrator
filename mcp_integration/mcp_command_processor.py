@@ -24,6 +24,21 @@ class MCPCommandProcessor:
         self.calendar_client = calendar_client
         self.meet_client = meet_client
         self.strava_client = strava_client
+        # Detect calendar client signature (provider vs raw client)
+        self._calendar_accepts_keywords = False
+        try:
+            import inspect
+            sig = inspect.signature(getattr(self.calendar_client, 'create_event', lambda: None))
+            params = list(sig.parameters.keys())
+            # MCPCalendarProvider: (title, start, duration_minutes=60, attendees=None)
+            if params[:2] == ['title','start']:
+                self._calendar_mode = 'provider'
+            else:
+                self._calendar_mode = 'raw'
+            # Check if keywords exist
+            self._calendar_accepts_keywords = any(p == 'start_time' for p in params) or any(p == 'duration_minutes' for p in params)
+        except Exception:
+            self._calendar_mode = 'unknown'
         
         # Initialize Claude client
         api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -772,20 +787,20 @@ ACTION REQUIRED NOW."""
             logger.info(f"✅ [MCP] Meet link ready: {meet_link}")
             
             # Use the calendar client (support heterogeneous signatures by using positional args)
-            logger.info(f"📅 [MCP] Creating calendar event via calendar client (positional call)...")
+            logger.info(f"📅 [MCP] Creating calendar event via calendar client (mode={getattr(self,'_calendar_mode','?')})...")
             duration = input_data.get("duration_minutes", 60)
+            event = None
             try:
-                event = await self.calendar_client.create_event(
-                    input_data["title"],
-                    start_time,
-                    duration,
-                    attendee_emails,
-                    meet_link
-                )
-            except TypeError as te:
-                # Retry with keyword args as legacy path
-                logger.warning(f"⚠️ [MCP] Positional create_event failed ({te}); retrying with keyword arguments")
-                try:
+                if getattr(self,'_calendar_mode','') == 'provider':
+                    # MCPCalendarProvider signature: (title, start, duration_minutes=60, attendees=None)
+                    event = await self.calendar_client.create_event(
+                        input_data["title"],
+                        start_time,
+                        duration,
+                        attendee_emails
+                    )
+                else:
+                    # Assume raw RealMCPCalendarClient style with kwargs
                     event = await self.calendar_client.create_event(
                         title=input_data["title"],
                         start_time=start_time,
@@ -793,8 +808,19 @@ ACTION REQUIRED NOW."""
                         attendees=attendee_emails,
                         meet_link=meet_link
                     )
+            except TypeError as te:
+                logger.warning(f"⚠️ [MCP] First create_event attempt failed ({te}); trying alternate signature")
+                try:
+                    if getattr(self,'_calendar_mode','') == 'provider':
+                        event = await self.calendar_client.create_event(
+                            input_data["title"], start_time, duration, attendee_emails
+                        )
+                    else:
+                        event = await self.calendar_client.create_event(
+                            input_data["title"], start_time, duration, attendee_emails, meet_link
+                        )
                 except Exception as e2:
-                    logger.error(f"❌ [MCP] Calendar create_event failed on both attempts: {e2}")
+                    logger.error(f"❌ [MCP] Calendar create_event failed after retries: {e2}")
                     return {"success": False, "error": f"Calendar client unsupported signature: {e2}"}
             
             logger.info(f"📊 [MCP] Calendar client response: {event}")
