@@ -16,12 +16,12 @@ class RealMCPCalendarClient:
         # Enable only if MCP endpoint configured
         import os
         self.mcp_endpoint = os.getenv("RAILWAY_MCP_ENDPOINT")
-        self.mcp_enabled = bool(self.mcp_endpoint)
-        
-        if self.mcp_enabled:
-            logger.info("✅ Real MCP Google Calendar tools detected")
+        # New directive: ALWAYS use MCP (no direct fallback). Mark enabled regardless of endpoint presence to keep code paths consistent.
+        self.mcp_enabled = True
+        if not self.mcp_endpoint:
+            logger.warning("⚠️ RAILWAY_MCP_ENDPOINT missing at init; MCP calls will fail until it's set, but fallback is intentionally removed.")
         else:
-            logger.warning("⚠️ MCP Google Calendar tools disabled (RAILWAY_MCP_ENDPOINT missing) - will rely on direct Google client if available")
+            logger.info("✅ Real MCP Google Calendar endpoint configured")
     
     def _detect_mcp_tools(self) -> bool:
         """Assume MCP Google Calendar tools are available - user has 8 tools"""
@@ -94,8 +94,7 @@ class RealMCPCalendarClient:
     async def list_events(self, days_ahead: int = 7, limit: int = 10) -> List[Dict]:
         """List events using real MCP tools"""
         
-        if not self.mcp_enabled:
-            return []
+    # Always proceed (MCP-only architecture). Errors handled per-call.
         
         try:
             now = datetime.utcnow()
@@ -123,6 +122,7 @@ class RealMCPCalendarClient:
                             "id": event.get("id"),
                             "title": event.get("title", "No title"),
                             "start_time": event.get("start_time"),
+                            "start_time_iso": event.get("start_time"),
                             "meet_link": event.get("meet_link"),
                             "calendar_link": event.get("calendar_link")
                         })
@@ -133,6 +133,7 @@ class RealMCPCalendarClient:
                             "id": event.get("id"),
                             "title": event.get("summary", "No title"),
                             "start_time": start,
+                            "start_time_iso": start,
                             "meet_link": event.get("hangoutLink"),
                             "calendar_link": event.get("htmlLink")
                         })

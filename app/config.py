@@ -21,34 +21,34 @@ class Settings:
                 and os.getenv("DATABASE_URL", "").startswith("sqlite:///:memory:")
             )
         )
-        self.environment: str = "testing" if inferred_testing else os.getenv("ENVIRONMENT", "development")
-        self.port: int = int(os.getenv("PORT", "8000"))
+        self.environment = "testing" if inferred_testing else os.getenv("ENVIRONMENT", "development")
+        self.port = int(os.getenv("PORT", "8000"))
 
         # Database
-        self.database_url: Optional[str] = os.getenv("DATABASE_URL") or "sqlite:///./app.db"
+        self.database_url = os.getenv("DATABASE_URL") or "sqlite:///./app.db"
 
         # Surge SMS
-        self.surge_api_key: Optional[str] = os.getenv("SURGE_SMS_API_KEY") or os.getenv("SURGE_API_KEY") or os.getenv("SURGE_APIKEY")
-        self.surge_account_id: Optional[str] = os.getenv("SURGE_ACCOUNT_ID") or os.getenv("SURGE_SMS_ACCOUNT_ID") or os.getenv("SURGE_ACCOUNT")
+        self.surge_api_key = os.getenv("SURGE_SMS_API_KEY") or os.getenv("SURGE_API_KEY") or os.getenv("SURGE_APIKEY")
+        self.surge_account_id = os.getenv("SURGE_ACCOUNT_ID") or os.getenv("SURGE_SMS_ACCOUNT_ID") or os.getenv("SURGE_ACCOUNT")
 
         # LLM / Anthropic
-        self.anthropic_api_key: Optional[str] = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
-        self.llm_enabled: bool = bool(self.anthropic_api_key)
+        self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
+        self.llm_enabled = bool(self.anthropic_api_key)
 
         # Google Calendar (direct)
-        self.google_access_token: Optional[str] = os.getenv("GOOGLE_CALENDAR_ACCESS_TOKEN")
-        self.google_refresh_token: Optional[str] = os.getenv("GOOGLE_CALENDAR_REFRESH_TOKEN")
-        self.google_client_id: Optional[str] = os.getenv("GOOGLE_CALENDAR_CLIENT_ID")
-        self.google_client_secret: Optional[str] = os.getenv("GOOGLE_CALENDAR_CLIENT_SECRET")
-        self.google_calendar_id: str = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+        self.google_access_token = os.getenv("GOOGLE_CALENDAR_ACCESS_TOKEN")
+        self.google_refresh_token = os.getenv("GOOGLE_CALENDAR_REFRESH_TOKEN")
+        self.google_client_id = os.getenv("GOOGLE_CALENDAR_CLIENT_ID")
+        self.google_client_secret = os.getenv("GOOGLE_CALENDAR_CLIENT_SECRET")
+        self.google_calendar_id = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 
-        # Feature flags
-        self.enable_mcp_calendar: bool = os.getenv("ENABLE_MCP_CALENDAR", "true").lower() == "true"
-        self.use_real_mcp_calendar: bool = os.getenv("USE_REAL_MCP_CALENDAR", "true").lower() == "true"
-        self.use_direct_google_calendar: bool = os.getenv("USE_DIRECT_GOOGLE_CALENDAR", "false").lower() == "true"
+        # Feature flags (simplified: always use MCP; direct calendar disabled unless explicitly reintroduced)
+        self.enable_mcp_calendar = True
+        self.use_real_mcp_calendar = True
+        self.use_direct_google_calendar = False
 
         # Debug / Admin protection (future)
-        self.admin_api_key: Optional[str] = os.getenv("ADMIN_API_KEY")
+        self.admin_api_key = os.getenv("ADMIN_API_KEY")
 
 
 _SETTINGS_CACHE: Optional[Settings] = None
@@ -76,12 +76,5 @@ def get_settings(refresh: bool = False) -> Settings:
         import sys
         if any(m.startswith('tests.') or m.startswith('test_') for m in sys.modules.keys()):
             _SETTINGS_CACHE.environment = 'testing'
-    # Sync llm_enabled on existing coordinator if present
-    if 'app.services' in sys.modules:
-        try:
-            from app import services  # type: ignore
-            if hasattr(services, 'command_processor'):
-                services.command_processor.llm_enabled = bool(_SETTINGS_CACHE.anthropic_api_key)
-        except Exception:
-            pass
+    # Removed dynamic llm_enabled sync to avoid attribute errors on command processor
     return _SETTINGS_CACHE

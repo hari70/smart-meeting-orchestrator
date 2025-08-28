@@ -56,8 +56,8 @@ def register_google_calendar_mcp_tools():
 
     mcp_endpoint = os.getenv("RAILWAY_MCP_ENDPOINT")
     if not mcp_endpoint:
-        logger.info("ℹ️ RAILWAY_MCP_ENDPOINT not set - skipping MCP Google Calendar tool registration (direct API / fallback logic will be used)")
-        return
+        # New directive: assume MCP is always intended; log warning but continue so code paths remain deterministic
+        logger.warning("⚠️ RAILWAY_MCP_ENDPOINT not set at import; MCP tool executors will raise if invoked. Registration proceeds for deterministic MCP-only architecture.")
 
     async def create_gcal_event(**kwargs):
         """Create a Google Calendar event"""
